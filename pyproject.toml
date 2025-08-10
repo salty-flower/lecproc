@@ -1,0 +1,14 @@
+[project]
+name = "lecproc"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+lint = [
+    "basedpyright>=1.31.1",
+    "mypy>=1.17.1",
+    "ruff>=0.12.8",
+]
