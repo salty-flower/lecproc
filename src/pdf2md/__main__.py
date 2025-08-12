@@ -4,9 +4,9 @@ from asyncio import CancelledError
 from pathlib import Path
 from typing import Any, ClassVar, cast, override
 
-import aiofiles
 import anyio
 import litellm
+from anyio import open_file
 from natsort import natsorted
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg, SettingsConfigDict
@@ -227,7 +227,8 @@ async def _convert_one(
         output_path = _output_path_for(pdf_path)
 
         async with semaphore:
-            pdf_bytes = await _read_all_bytes(pdf_path)
+            async with await open_file(pdf_path, "rb") as f:
+                pdf_bytes = await f.read()
             base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
             messages: list[UserMessage] = compose_pdf_user_messages(base64_pdf)
 
@@ -244,7 +245,7 @@ async def _convert_one(
             )[0].message.content
 
             # Write result
-            async with aiofiles.open(output_path, "w", encoding="utf-8") as f:
+            async with await open_file(output_path, "w", encoding="utf-8") as f:
                 _ = await f.write(text or "")
 
             logger.info("Converted: %s -> %s", pdf_path.name, output_path.name)
@@ -254,10 +255,5 @@ async def _convert_one(
         progress.update(task_id, advance=1)
 
 
-async def _read_all_bytes(path: Path) -> bytes:
-    async with aiofiles.open(path, "rb") as f:
-        return await f.read()
-
-
 if __name__ == "__main__":
-    _ = Cli.run_anyio_trio()
+    _ = Cli.run_anyio()

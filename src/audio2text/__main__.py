@@ -4,8 +4,7 @@ from collections.abc import AsyncGenerator, Iterable, Iterator
 from pathlib import Path
 from typing import ClassVar, override
 
-from aiofiles import open as aopen
-from anyio import to_thread
+from anyio import open_file, to_thread
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment, TranscriptionInfo
 from pydantic import computed_field
@@ -82,7 +81,7 @@ class Cli(CommonCliSettings):
             )
 
             if output_path:
-                async with aopen(output_path, "w") as f:
+                async with await open_file(output_path, "w") as f:
                     async for segment in _iterate_segments(
                         segments, progress, task_id, total_seconds
                     ):
@@ -147,4 +146,4 @@ async def _iterate_segments(
 
 
 if __name__ == "__main__":
-    _ = Cli.run_anyio_trio()
+    _ = Cli.run_anyio()

@@ -2,7 +2,6 @@ import logging
 from typing import Any, ClassVar, override
 
 import anyio
-
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,7 +26,7 @@ class CommonCliSettings(BaseSettings):
     async def cli_cmd(self) -> None: ...
 
     @classmethod
-    def run_anyio_trio(cls):
+    def run_anyio(cls):
         """Instantiate CLI settings and run `cli_cmd` under AnyIO with the Trio backend.
 
         Returns the instantiated model for introspection/testing.
@@ -35,7 +34,10 @@ class CommonCliSettings(BaseSettings):
         model = cls()
 
         async def _main() -> None:
-            await model.cli_cmd()
+            try:
+                return await model.cli_cmd()
+            except KeyboardInterrupt:
+                model.logger.info("Keyboard interrupt received. Exiting...")
+                raise
 
-        anyio.run(_main, backend="trio")
-        return model
+        return anyio.run(_main, backend="asyncio")
