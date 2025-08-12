@@ -7,6 +7,7 @@ from typing import Any, ClassVar, cast, override
 import anyio
 import litellm
 from anyio import open_file
+from litellm.exceptions import InternalServerError
 from natsort import natsorted
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg, SettingsConfigDict
@@ -90,6 +91,7 @@ class Cli(CommonCliSettings):
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny,reportExplicitAny]
         # suppress litellm logging
+        litellm.suppress_debug_info = True
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
     @computed_field
@@ -237,7 +239,11 @@ async def _convert_one(
                 with anyio.fail_after(settings.request_timeout_s):
                     response = await litellm.acompletion(model=model, messages=messages)  # pyright: ignore[reportUnknownMemberType]
             except (TimeoutError, CancelledError):
-                raise TimeoutError(f"Timed out after {settings.request_timeout_s:.1f}s")
+                logger.error("Timed out after %s", settings.request_timeout_s)
+                return
+            except InternalServerError as e:
+                logger.error("LLM API vendor boom: %s", e)
+                return
 
             text = cast(
                 list[litellm.Choices],
