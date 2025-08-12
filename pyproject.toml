@@ -11,6 +11,8 @@ dependencies = [
     "rich>=14.1.0",
     # audio2text
     "faster-whisper>=1.2.0",
+    "litellm>=1.75.5.post1",
+    "natsort>=8.4.0",
 ]
 
 [dependency-groups]
