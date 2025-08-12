@@ -9,7 +9,7 @@ import anyio
 import litellm
 from natsort import natsorted
 from pydantic import computed_field
-from pydantic_settings import CliApp, CliPositionalArg, SettingsConfigDict
+from pydantic_settings import CliPositionalArg, SettingsConfigDict
 from rich.progress import Progress
 
 from common_cli_settings import CommonCliSettings
@@ -260,6 +260,4 @@ async def _read_all_bytes(path: Path) -> bytes:
 
 
 if __name__ == "__main__":
-    from anyio import run as arun
-
-    arun(CliApp.run, Cli)
+    _ = Cli.run_anyio_trio()

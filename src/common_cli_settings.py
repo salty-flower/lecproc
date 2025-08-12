@@ -1,6 +1,8 @@
 import logging
 from typing import Any, ClassVar, override
 
+import anyio
+
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,5 +26,16 @@ class CommonCliSettings(BaseSettings):
 
     async def cli_cmd(self) -> None: ...
 
-    def __await__(self):
-        return self.cli_cmd().__await__()
+    @classmethod
+    def run_anyio_trio(cls):
+        """Instantiate CLI settings and run `cli_cmd` under AnyIO with the Trio backend.
+
+        Returns the instantiated model for introspection/testing.
+        """
+        model = cls()
+
+        async def _main() -> None:
+            await model.cli_cmd()
+
+        anyio.run(_main, backend="trio")
+        return model

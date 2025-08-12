@@ -5,12 +5,11 @@ from pathlib import Path
 from typing import ClassVar, override
 
 from aiofiles import open as aopen
-from anyio import run as arun
 from anyio import to_thread
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment, TranscriptionInfo
 from pydantic import computed_field
-from pydantic_settings import CliApp, CliPositionalArg, SettingsConfigDict
+from pydantic_settings import CliPositionalArg, SettingsConfigDict
 from rich.progress import Progress
 
 from common_cli_settings import CommonCliSettings
@@ -148,4 +147,4 @@ async def _iterate_segments(
 
 
 if __name__ == "__main__":
-    arun(CliApp.run, Cli)
+    _ = Cli.run_anyio_trio()
