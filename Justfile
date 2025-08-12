@@ -2,7 +2,7 @@ set shell := ["zsh", "-c"]
 unexport VIRTUAL_ENV
 
 format:
-    uv run ruff check --fix
+    uv run ruff check --select I --fix
     uv run ruff format
 
     shfmt -i 2 -w scripts/*.*sh

@@ -2,22 +2,24 @@ import logging
 from typing import Final
 
 from rich.logging import RichHandler
-from rich.traceback import install as install_rich_traceback
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
+    TaskID,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
-    TaskID,
 )
+from rich.traceback import install as install_rich_traceback
 
 _CONFIGURED: Final[dict[str, bool]] = {"rich_logging": False}
 
 
-def configure_rich_logging(level: int = logging.INFO, markup: bool = False) -> None:
+def configure_rich_logging(
+    level: int | str = logging.INFO, markup: bool = False
+) -> None:
     """Idempotently configure Rich logging and tracebacks for the process.
 
     Safe to call multiple times; configuration will only be applied once.

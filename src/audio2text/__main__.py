@@ -1,40 +1,36 @@
-import json
 import dataclasses
+import json
+from collections.abc import AsyncGenerator, Iterable, Iterator
 from pathlib import Path
-from typing import ClassVar
-from collections.abc import Iterator, AsyncGenerator, Iterable
+from typing import ClassVar, override
 
-from pydantic_settings import CliApp, BaseSettings, CliPositionalArg, SettingsConfigDict
-import trio
-from pydantic import computed_field
-from faster_whisper import WhisperModel
 from aiofiles import open as aopen
-from rich.progress import Progress
+from anyio import run as arun
+from anyio import to_thread
+from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment, TranscriptionInfo
+from pydantic import computed_field
+from pydantic_settings import CliApp, CliPositionalArg, SettingsConfigDict
+from rich.progress import Progress
+
+from common_cli_settings import CommonCliSettings
+from logs import TaskID, create_progress
+from path_settings import path_settings
 
 from .settings import settings
-from path_settings import path_settings
-from logs import create_progress, configure_rich_logging, get_logger, TaskID
 
 
-configure_rich_logging()
-logger = get_logger("audio2text")
-
-
-class Cli(BaseSettings):
+class Cli(CommonCliSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=".env", cli_parse_args=True
     )
     media_path: CliPositionalArg[Path]
     save_path: CliPositionalArg[Path | None] = None
 
-    def __await__(self):
-        return self.cli_cmd().__await__()
-
     @computed_field
     @property
     def model(self) -> WhisperModel:
-        logger.info(
+        self.logger.info(
             "Loading model '%s' (compute_type=%s) into %s",
             settings.model_path,
             settings.compute_type,
@@ -46,6 +42,7 @@ class Cli(BaseSettings):
             compute_type=settings.compute_type,
         )
 
+    @override
     async def cli_cmd(self) -> None:
         segments, info = self.model.transcribe(  # pyright: ignore[reportUnknownMemberType]
             str(self.media_path.absolute()), language="en"
@@ -60,20 +57,20 @@ class Cli(BaseSettings):
         duration: float | None = getattr(info_typed, "duration", None)
         if language is not None:
             if language_probability is not None:
-                logger.info(
+                self.logger.info(
                     "Detected language: %s (p=%.2f)",
                     language,
                     float(language_probability),
                 )
             else:
-                logger.info("Detected language: %s", language)
+                self.logger.info("Detected language: %s", language)
         if duration is not None:
-            logger.info("Audio duration: %.2fs", float(duration))
+            self.logger.info("Audio duration: %.2fs", float(duration))
 
         # Prepare output file if provided
         output_path = str(self.save_path) if self.save_path is not None else None
         if output_path:
-            logger.info("Writing segments to %s", output_path)
+            self.logger.info("Writing segments to %s", output_path)
 
         progress = create_progress()
 
@@ -90,7 +87,7 @@ class Cli(BaseSettings):
                     async for segment in _iterate_segments(
                         segments, progress, task_id, total_seconds
                     ):
-                        logger.debug(
+                        self.logger.debug(
                             "[%s - %s] %s",
                             segment.start,
                             segment.end,
@@ -103,13 +100,13 @@ class Cli(BaseSettings):
                 async for segment in _iterate_segments(
                     segments, progress, task_id, total_seconds
                 ):
-                    logger.debug(
+                    self.logger.debug(
                         "[%s - %s] %s",
                         segment.start,
                         segment.end,
                         segment.text,
                     )
-        logger.info("Transcription complete")
+        self.logger.info("Transcription complete")
 
 
 async def _iterate_segments(
@@ -120,7 +117,7 @@ async def _iterate_segments(
 ) -> AsyncGenerator[Segment, None]:
     """Async-iterate over segments while updating progress.
 
-    The faster-whisper `segments` is a generator; wrap it for async consumption under Trio.
+    The faster-whisper `segments` is a generator; wrap it for async consumption.
     """
     last_completed = 0.0
 
@@ -133,8 +130,8 @@ async def _iterate_segments(
             return None
 
     while True:
-        # Run the blocking `next()` in a worker thread to avoid blocking Trio
-        segment = await trio.to_thread.run_sync(_next_segment_blocking)
+        # Run the blocking `next()` in a worker thread to avoid blocking the event loop
+        segment: Segment | None = await to_thread.run_sync(_next_segment_blocking)
         if segment is None:
             break
 
@@ -151,4 +148,4 @@ async def _iterate_segments(
 
 
 if __name__ == "__main__":
-    trio.run(CliApp.run, Cli)
+    arun(CliApp.run, Cli)
