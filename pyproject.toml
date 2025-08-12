@@ -26,3 +26,6 @@ lint = [
 typeCheckingMode = "recommended"
 reportMissingTypeStubs = false
 reportImplicitRelativeImport = false
+
+[tool.mypy]
+disable_error_code = ["prop-decorator", "import-untyped"]
