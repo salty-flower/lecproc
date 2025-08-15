@@ -207,7 +207,7 @@ def discover_pdf_files(root: Path) -> list[Path]:
         return []
 
     return natsorted(
-        (p for p in base.rglob("*") if is_pdf_file(p)), key=lambda p: str(p).lower()
+        (p for p in base.glob("*") if is_pdf_file(p)), key=lambda p: str(p).lower()
     )
 
 
