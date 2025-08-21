@@ -12,7 +12,9 @@ dependencies = [
     # audio2text
     "faster-whisper>=1.2.0",
     # pdf2md
-    "litellm>=1.75.5.post1"
+    "litellm>=1.75.5.post1",
+    # general deep-learning runtimes
+    "torch>=2.8.0",
 ]
 
 [dependency-groups]
@@ -21,6 +23,30 @@ lint = [
     "mypy>=1.17.1",
     "ruff>=0.12.8",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+# Intel GPU support relies on `pytorch-triton-xpu`, which should also be installed from the PyTorch index
+# (and included in `project.dependencies`).
+pytorch-triton-xpu = [
+  { index = "pytorch-xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
 
 [tool.basedpyright]
 typeCheckingMode = "recommended"
