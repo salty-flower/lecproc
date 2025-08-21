@@ -8,7 +8,6 @@ import anyio
 import litellm
 from anyio import open_file
 from litellm.exceptions import InternalServerError
-from natsort import natsorted
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg, SettingsConfigDict
 from rich.progress import Progress
@@ -16,18 +15,9 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
-from .models import UserMessage, compose_pdf_user_messages
+from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
-
-
-def format_display_path(path: Path, base: Path) -> str:
-    """Return a readable path for logs: relative to `base` when possible, else absolute."""
-    target_abs = path.resolve().absolute()
-    base_abs = base.resolve().absolute()
-    try:
-        return str(target_abs.relative_to(base_abs))
-    except ValueError:
-        return str(target_abs)
+from .utils import discover_pdf_files, format_display_path, output_path_for
 
 
 def plan_processing(
@@ -45,7 +35,7 @@ def plan_processing(
     removed_empty: list[Path] = []
 
     for pdf_path in pdf_files:
-        output_path = _output_path_for(pdf_path)
+        output_path = output_path_for(pdf_path)
         try:
             if output_path.exists():
                 try:
@@ -87,6 +77,9 @@ class Cli(CommonCliSettings):
 
     root_path: CliPositionalArg[Path]
     overwrite: bool = False
+    general_context_file: str | None = "context.json"
+
+    concurrency: int = settings.max_concurrency
 
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny,reportExplicitAny]
@@ -148,12 +141,38 @@ class Cli(CommonCliSettings):
         successes = 0
         failures = 0
 
+        if (
+            self.general_context_file
+            and (self.root_path / self.general_context_file).exists()
+        ):
+            self.logger.info(
+                "Loading general context from %s", self.general_context_file
+            )
+            async with await open_file(
+                self.root_path / self.general_context_file, "r", encoding="utf-8"
+            ) as f:
+                general_context = await f.read()
+            self.logger.info(
+                "Loaded general context with length %d. Headings: %s. Tail: %s",
+                len(general_context),
+                general_context[:100],
+                general_context[-100:],
+            )
+        else:
+            self.logger.info(
+                "No general context file provided%s",
+                f": {self.root_path / self.general_context_file} does not exist"
+                if self.general_context_file
+                else "",
+            )
+            general_context = None
+
         with progress:
             task_id: TaskID = progress.add_task(
                 "Converting PDFs", total=len(to_process)
             )
 
-            semaphore = anyio.Semaphore(settings.max_concurrency)
+            semaphore = anyio.Semaphore(self.concurrency)
             async with anyio.create_task_group() as tg:
                 for pdf_path in to_process:
                     tg.start_soon(
@@ -164,12 +183,13 @@ class Cli(CommonCliSettings):
                         task_id,
                         semaphore,
                         self.logger.name,
+                        general_context,
                     )
 
             # The per-task function updates the progress bar. For a quick summary,
             # re-scan outcomes by checking .md files existence.
             for pdf_path in to_process:
-                output_path = _output_path_for(pdf_path)
+                output_path = output_path_for(pdf_path)
                 if output_path.exists() and output_path.stat().st_size > 0:
                     successes += 1
                 else:
@@ -189,32 +209,6 @@ class Cli(CommonCliSettings):
             )
 
 
-def is_pdf_file(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() == ".pdf"
-
-
-def discover_pdf_files(root: Path) -> list[Path]:
-    """Return sorted list of PDF files under `root`.
-
-    - If `root` is a single PDF file, return it.
-    - If `root` is a directory, recursively search for PDFs by suffix.
-    - If `root` does not exist or is not a PDF/file, return empty list.
-    """
-    base = root.resolve().absolute()
-    if base.is_file():
-        return [base] if is_pdf_file(base) else []
-    if not base.exists():
-        return []
-
-    return natsorted(
-        (p for p in base.glob("*") if is_pdf_file(p)), key=lambda p: str(p).lower()
-    )
-
-
-def _output_path_for(pdf_path: Path) -> Path:
-    return pdf_path.with_suffix(f".{settings.output_extension}")
-
-
 async def _convert_one(
     pdf_path: Path,
     model: str,
@@ -222,17 +216,20 @@ async def _convert_one(
     task_id: TaskID,
     semaphore: anyio.Semaphore,
     logger_name: str,
+    general_context: str | None = None,
 ) -> None:
     logger = get_logger(logger_name)
 
     try:
-        output_path = _output_path_for(pdf_path)
+        output_path = output_path_for(pdf_path)
 
         async with semaphore:
             async with await open_file(pdf_path, "rb") as f:
                 pdf_bytes = await f.read()
             base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-            messages: list[UserMessage] = compose_pdf_user_messages(base64_pdf)
+            messages: list[UserMessage | SystemMessage] = compose_pdf_user_messages(
+                pdf_path.name, base64_pdf, general_context
+            )
 
             # Enforce an overall per-request timeout on top of provider timeouts
             try:
@@ -251,10 +248,13 @@ async def _convert_one(
             )[0].message.content
 
             # Write result
-            async with await open_file(output_path, "w", encoding="utf-8") as f:
-                _ = await f.write(text or "")
+            if text:
+                async with await open_file(output_path, "w", encoding="utf-8") as f:
+                    _ = await f.write(text)
 
-            logger.info("Converted: %s -> %s", pdf_path.name, output_path.name)
+                logger.info("Converted: %s -> %s", pdf_path.name, output_path.name)
+            else:
+                logger.warning("No text returned for %s", pdf_path.name)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to convert %s: %s", pdf_path, exc)
     finally:
