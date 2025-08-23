@@ -2,13 +2,13 @@ import dataclasses
 import json
 from collections.abc import AsyncGenerator, Iterable, Iterator
 from pathlib import Path
-from typing import ClassVar, override
+from typing import override
 
 from anyio import open_file, to_thread
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment, TranscriptionInfo
 from pydantic import computed_field
-from pydantic_settings import CliPositionalArg, SettingsConfigDict
+from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
 
 from common_cli_settings import CommonCliSettings
@@ -19,9 +19,6 @@ from .settings import settings
 
 
 class Cli(CommonCliSettings):
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
-        env_file=".env", cli_parse_args=True
-    )
     media_path: CliPositionalArg[Path]
     save_path: CliPositionalArg[Path | None] = None
 

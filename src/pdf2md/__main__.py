@@ -2,14 +2,14 @@ import base64
 import logging
 from asyncio import CancelledError
 from pathlib import Path
-from typing import Any, ClassVar, cast, override
+from typing import Any, cast, override
 
 import anyio
 import litellm
 from anyio import open_file
 from litellm.exceptions import InternalServerError
 from pydantic import computed_field
-from pydantic_settings import CliPositionalArg, SettingsConfigDict
+from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
 
 from common_cli_settings import CommonCliSettings
@@ -70,10 +70,6 @@ class Cli(CommonCliSettings):
     Naively sends the raw PDF (base64) to the model and writes the response
     to a `.md` file with the same basename next to the source PDF.
     """
-
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
-        env_file=".env", cli_parse_args=True
-    )
 
     root_path: CliPositionalArg[Path]
     overwrite: bool = False
