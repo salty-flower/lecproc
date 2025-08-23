@@ -1,0 +1,10 @@
+basedpyright
+ipynb
+jupytext
+shfmt
+litellm
+lecproc
+idempotently
+natsorted
+acompletion
+biomejs

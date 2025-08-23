@@ -5,7 +5,9 @@ format:
     uv run ruff check --select I --fix
     uv run ruff format
 
-    shfmt -i 2 -w scripts/*.*sh
+    shfmt -i 2 -w scripts/*.*sh || true
+
+    pnpm dlx @biomejs/biome format --write --vcs-enabled true --vcs-client-kind git --vcs-use-ignore-file true --indent-style space --indent-width 2 **/*.json
 
 type-check:
     uv run mypy src
