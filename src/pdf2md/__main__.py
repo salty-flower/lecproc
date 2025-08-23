@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import logging
 from asyncio import CancelledError
 from pathlib import Path
@@ -21,7 +22,8 @@ from .utils import discover_pdf_files, format_display_path, output_path_for
 
 
 def plan_processing(
-    pdf_files: list[Path], overwrite: bool
+    pdf_files: list[Path],
+    overwrite: bool,
 ) -> tuple[list[Path], list[Path], list[Path]]:
     """Plan which PDFs to process, which to skip, and which empty outputs to remove.
 
@@ -29,6 +31,7 @@ def plan_processing(
         - to_process: list of PDF files to convert
         - skipped: list of PDF files skipped due to existing non-empty outputs (when not overwriting)
         - removed_empty: list of empty output files that were deleted before processing begins
+
     """
     to_process: list[Path] = []
     skipped: list[Path] = []
@@ -44,10 +47,8 @@ def plan_processing(
                     size = -1
 
                 if size == 0:
-                    try:
+                    with contextlib.suppress(OSError):
                         output_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
                     removed_empty.append(output_path)
                     to_process.append(pdf_path)
                     continue
@@ -100,10 +101,11 @@ class Cli(CommonCliSettings):
         if not pdf_files:
             self.logger.warning("No PDF files found under %s", self.root_path)
             return
-        else:
-            self.logger.info(
-                "Discovered %d PDF file(s) under %s", len(pdf_files), self.root_path
-            )
+        self.logger.info(
+            "Discovered %d PDF file(s) under %s",
+            len(pdf_files),
+            self.root_path,
+        )
 
         to_process, skipped, removed_empty = plan_processing(pdf_files, self.overwrite)
 
@@ -126,12 +128,11 @@ class Cli(CommonCliSettings):
         if not to_process:
             self.logger.info("Nothing to process after skip checks.")
             return
-        else:
-            self.logger.info(
-                "Processing %d PDF file(s):\n%s",
-                len(to_process),
-                ", ".join(format_display_path(p, self.root_path) for p in to_process),
-            )
+        self.logger.info(
+            "Processing %d PDF file(s):\n%s",
+            len(to_process),
+            ", ".join(format_display_path(p, self.root_path) for p in to_process),
+        )
 
         progress = create_progress()
         successes = 0
@@ -142,10 +143,13 @@ class Cli(CommonCliSettings):
             and (self.root_path / self.general_context_file).exists()
         ):
             self.logger.info(
-                "Loading general context from %s", self.general_context_file
+                "Loading general context from %s",
+                self.general_context_file,
             )
             async with await open_file(
-                self.root_path / self.general_context_file, "r", encoding="utf-8"
+                self.root_path / self.general_context_file,
+                "r",
+                encoding="utf-8",
             ) as f:
                 general_context = await f.read()
             self.logger.info(
@@ -232,15 +236,15 @@ async def _convert_one(
                 with anyio.fail_after(settings.request_timeout_s):
                     response = await litellm.acompletion(model=model, messages=messages)  # pyright: ignore[reportUnknownMemberType]
             except (TimeoutError, CancelledError):
-                logger.error("Timed out after %s", settings.request_timeout_s)
+                logger.exception("Timed out after %s", settings.request_timeout_s)
                 return
-            except InternalServerError as e:
-                logger.error("LLM API vendor boom: %s", e)
+            except InternalServerError:
+                logger.exception("LLM API vendor boom")
                 return
 
             text = cast(
-                list[litellm.Choices],
-                cast(litellm.ModelResponse, response).choices,  # pyright: ignore[reportPrivateImportUsage]
+                "list[litellm.Choices]",
+                cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
             )[0].message.content
 
             # Write result
@@ -251,8 +255,8 @@ async def _convert_one(
                 logger.info("Converted: %s -> %s", pdf_path.name, output_path.name)
             else:
                 logger.warning("No text returned for %s", pdf_path.name)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to convert %s: %s", pdf_path, exc)
+    except Exception:
+        logger.exception("Failed to convert %s", pdf_path)
     finally:
         progress.update(task_id, advance=1)
 

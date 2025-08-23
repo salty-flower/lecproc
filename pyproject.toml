@@ -55,3 +55,7 @@ reportImplicitRelativeImport = false
 
 [tool.mypy]
 disable_error_code = ["prop-decorator", "import-untyped"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D", "COM", "E501", "PLR091", "FBT00", "C901"]

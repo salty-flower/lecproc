@@ -26,7 +26,7 @@ class CommonCliSettings(BaseSettings):
     async def cli_cmd(self) -> None: ...
 
     @classmethod
-    def run_anyio(cls):
+    def run_anyio(cls) -> None:
         """Instantiate CLI settings and run `cli_cmd` under AnyIO with the Trio backend.
 
         Returns the instantiated model for introspection/testing.

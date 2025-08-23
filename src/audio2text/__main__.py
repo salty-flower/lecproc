@@ -109,7 +109,7 @@ async def _iterate_segments(
     progress: Progress,
     task_id: TaskID,
     total_seconds: float | None,
-) -> AsyncGenerator[Segment, None]:
+) -> AsyncGenerator[Segment]:
     """Async-iterate over segments while updating progress.
 
     The faster-whisper `segments` is a generator; wrap it for async consumption.

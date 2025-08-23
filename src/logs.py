@@ -60,8 +60,8 @@ def create_progress() -> Progress:
 
 
 __all__ = [
-    "configure_rich_logging",
-    "get_logger",
-    "create_progress",
     "TaskID",
+    "configure_rich_logging",
+    "create_progress",
+    "get_logger",
 ]
