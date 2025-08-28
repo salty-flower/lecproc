@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     max_concurrency: int = 16
     request_timeout_s: float = 600.0
     output_extension: str = "md"
+    max_retry_attempts: int = 3
 
 
 settings = Settings()

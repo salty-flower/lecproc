@@ -231,10 +231,14 @@ async def _convert_one(
                 pdf_path.name, base64_pdf, general_context
             )
 
-            # Enforce an overall per-request timeout on top of provider timeouts
+            # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
             try:
                 with anyio.fail_after(settings.request_timeout_s):
-                    response = await litellm.acompletion(model=model, messages=messages)  # pyright: ignore[reportUnknownMemberType]
+                    response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+                        model=model,
+                        messages=messages,
+                        num_retries=settings.max_retry_attempts - 1,
+                    )
             except (TimeoutError, CancelledError):
                 logger.exception("Timed out after %s", settings.request_timeout_s)
                 return
