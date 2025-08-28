@@ -9,6 +9,7 @@ import anyio
 import litellm
 from anyio import open_file
 from litellm.exceptions import InternalServerError
+from litellm.integrations.custom_logger import CustomLogger
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
@@ -19,6 +20,30 @@ from logs import TaskID, create_progress, get_logger
 from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
 from .utils import discover_pdf_files, format_display_path, output_path_for
+
+
+class RetryProgressCallback(CustomLogger):
+    def __init__(self, progress: Progress, task_id: TaskID, pdf_name: str) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]
+        self.progress: Progress = progress
+        self.task_id: TaskID = task_id
+        self.pdf_name: str = pdf_name
+        self.retry_count: int = 0
+        self.max_retries: int = settings.max_retry_attempts
+
+    @override
+    def log_pre_api_call(self, model: Any, messages: Any, kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny,reportAny]
+        if self.retry_count > 0:
+            self.progress.update(
+                self.task_id,
+                description=f"Converting PDFs (retry {self.retry_count}/{self.max_retries - 1} for {self.pdf_name})",
+            )
+
+    @override
+    def log_failure_event(
+        self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:  # pyright: ignore[reportExplicitAny,reportAny]
+        self.retry_count += 1
 
 
 def plan_processing(
@@ -231,6 +256,9 @@ async def _convert_one(
                 pdf_path.name, base64_pdf, general_context
             )
 
+            # Create retry progress callback
+            retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
+
             # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
             try:
                 with anyio.fail_after(settings.request_timeout_s):
@@ -238,6 +266,7 @@ async def _convert_one(
                         model=model,
                         messages=messages,
                         num_retries=settings.max_retry_attempts - 1,
+                        callbacks=[retry_callback],
                     )
             except (TimeoutError, CancelledError):
                 logger.exception("Timed out after %s", settings.request_timeout_s)
