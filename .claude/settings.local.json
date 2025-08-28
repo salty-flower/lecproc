@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just type-check)",
+      "WebSearch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
