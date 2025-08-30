@@ -9,7 +9,7 @@ format:
 
     pnpm dlx @biomejs/biome format --write --vcs-enabled true --vcs-client-kind git --vcs-use-ignore-file true --indent-style space --indent-width 2 **/*.json
 
-type-check:
+check:
     uv run mypy src
     uv run basedpyright src
     uv run ruff check src
