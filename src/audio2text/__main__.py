@@ -46,9 +46,7 @@ class Cli(CommonCliSettings):
         # Log basic transcription info
         info_typed: TranscriptionInfo = info  # type: ignore[assignment]
         language: str | None = getattr(info_typed, "language", None)
-        language_probability: float | None = getattr(
-            info_typed, "language_probability", None
-        )
+        language_probability: float | None = getattr(info_typed, "language_probability", None)
         duration: float | None = getattr(info_typed, "duration", None)
         if language is not None:
             if language_probability is not None:
@@ -79,22 +77,16 @@ class Cli(CommonCliSettings):
 
             if output_path:
                 async with await open_file(output_path, "w") as f:
-                    async for segment in _iterate_segments(
-                        segments, progress, task_id, total_seconds
-                    ):
+                    async for segment in _iterate_segments(segments, progress, task_id, total_seconds):
                         self.logger.debug(
                             "[%s - %s] %s",
                             segment.start,
                             segment.end,
                             segment.text,
                         )
-                        _ = await f.write(
-                            json.dumps(dataclasses.asdict(segment)) + "\n"
-                        )
+                        _ = await f.write(json.dumps(dataclasses.asdict(segment)) + "\n")
             else:
-                async for segment in _iterate_segments(
-                    segments, progress, task_id, total_seconds
-                ):
+                async for segment in _iterate_segments(segments, progress, task_id, total_seconds):
                     self.logger.debug(
                         "[%s - %s] %s",
                         segment.start,

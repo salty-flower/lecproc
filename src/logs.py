@@ -17,9 +17,7 @@ from rich.traceback import install as install_rich_traceback
 _CONFIGURED: Final[dict[str, bool]] = {"rich_logging": False}
 
 
-def configure_rich_logging(
-    level: int | str = logging.INFO, markup: bool = False
-) -> None:
+def configure_rich_logging(level: int | str = logging.INFO, markup: bool = False) -> None:
     """Idempotently configure Rich logging and tracebacks for the process.
 
     Safe to call multiple times; configuration will only be applied once.

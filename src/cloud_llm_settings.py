@@ -4,9 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class CloudLLMSettings(BaseSettings):
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
-        env_file=".env", cli_parse_args=True
-    )
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(env_file=".env", cli_parse_args=True)
 
     gemini_api_key: str | None = None
 

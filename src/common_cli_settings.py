@@ -9,13 +9,11 @@ from logs import configure_rich_logging, get_logger
 
 
 class CommonCliSettings(BaseSettings):
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
-        env_file=".env", cli_parse_args=True
-    )
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(env_file=".env", cli_parse_args=True)
     log_level: str = "INFO"
 
     @override
-    def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny,reportExplicitAny]
+    def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
         configure_rich_logging(level=self.log_level)
 
     @computed_field

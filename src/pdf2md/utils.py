@@ -22,9 +22,7 @@ def discover_pdf_files(root: Path) -> list[Path]:
     if not base.exists():
         return []
 
-    return natsorted(
-        (p for p in base.glob("*") if is_pdf_file(p)), key=lambda p: str(p).lower()
-    )
+    return natsorted((p for p in base.glob("*") if is_pdf_file(p)), key=lambda p: str(p).lower())
 
 
 def output_path_for(pdf_path: Path) -> Path:

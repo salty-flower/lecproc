@@ -32,7 +32,7 @@ class RetryProgressCallback(CustomLogger):
         self.max_retries: int = settings.max_retry_attempts
 
     @override
-    def log_pre_api_call(self, model: Any, messages: Any, kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny,reportAny]
+    def log_pre_api_call(self, model: Any, messages: Any, kwargs: Any) -> None:  # pyright: ignore[reportAny]
         if self.retry_count > 0:
             self.progress.update(
                 self.task_id,
@@ -40,9 +40,7 @@ class RetryProgressCallback(CustomLogger):
             )
 
     @override
-    def log_failure_event(
-        self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any
-    ) -> None:  # pyright: ignore[reportExplicitAny,reportAny]
+    def log_failure_event(self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any) -> None:  # pyright: ignore[reportAny]
         self.retry_count += 1
 
 
@@ -104,7 +102,7 @@ class Cli(CommonCliSettings):
     concurrency: int = settings.max_concurrency
 
     @override
-    def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny,reportExplicitAny]
+    def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
         # suppress litellm logging
         litellm.suppress_debug_info = True
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
@@ -116,10 +114,9 @@ class Cli(CommonCliSettings):
 
     @override
     async def cli_cmd(self) -> None:
-        if not litellm.utils.supports_pdf_input(self.model, None):
-            self.logger.error(
-                "Model '%s' does not support PDF input. Aborting.", self.model
-            )
+        # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
+        if not self.model.startswith("openrouter/") and not litellm.utils.supports_pdf_input(self.model, None):
+            self.logger.error("Model '%s' does not support PDF input. Aborting.", self.model)
             return
 
         pdf_files: list[Path] = discover_pdf_files(self.root_path)
@@ -138,9 +135,7 @@ class Cli(CommonCliSettings):
             self.logger.info(
                 "Removed %d empty output file(s):\n%s",
                 len(removed_empty),
-                ", ".join(
-                    format_display_path(p, self.root_path) for p in removed_empty
-                ),
+                ", ".join(format_display_path(p, self.root_path) for p in removed_empty),
             )
 
         if skipped:
@@ -163,10 +158,7 @@ class Cli(CommonCliSettings):
         successes = 0
         failures = 0
 
-        if (
-            self.general_context_file
-            and (self.root_path / self.general_context_file).exists()
-        ):
+        if self.general_context_file and (self.root_path / self.general_context_file).exists():
             self.logger.info(
                 "Loading general context from %s",
                 self.general_context_file,
@@ -186,16 +178,12 @@ class Cli(CommonCliSettings):
         else:
             self.logger.info(
                 "No general context file provided%s",
-                f": {self.root_path / self.general_context_file} does not exist"
-                if self.general_context_file
-                else "",
+                f": {self.root_path / self.general_context_file} does not exist" if self.general_context_file else "",
             )
             general_context = None
 
         with progress:
-            task_id: TaskID = progress.add_task(
-                "Converting PDFs", total=len(to_process)
-            )
+            task_id: TaskID = progress.add_task("Converting PDFs", total=len(to_process))
 
             semaphore = anyio.Semaphore(self.concurrency)
             async with anyio.create_task_group() as tg:
@@ -221,9 +209,7 @@ class Cli(CommonCliSettings):
                     failures += 1
 
         if failures == 0:
-            self.logger.info(
-                "Completed %d/%d conversions successfully.", successes, len(to_process)
-            )
+            self.logger.info("Completed %d/%d conversions successfully.", successes, len(to_process))
         else:
             self.logger.warning(
                 "Completed %d/%d conversions successfully, %d failed, %d skipped.",
