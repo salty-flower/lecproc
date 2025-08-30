@@ -1,10 +1,12 @@
+acompletion
 basedpyright
+biomejs
+idempotently
 ipynb
 jupytext
-shfmt
-litellm
 lecproc
-idempotently
+litellm
 natsorted
-acompletion
-biomejs
+openrouter
+qwen
+shfmt
