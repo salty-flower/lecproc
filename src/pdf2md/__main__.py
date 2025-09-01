@@ -3,7 +3,7 @@ import contextlib
 import logging
 from asyncio import CancelledError
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
@@ -20,6 +20,19 @@ from logs import TaskID, create_progress, get_logger
 from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
 from .utils import discover_pdf_files, format_display_path, output_path_for
+
+
+async def load_context_file(context_path: Path) -> str:
+    async with await open_file(context_path, "r", encoding="utf-8") as f:
+        return await f.read()
+
+
+def discover_context_file(root_path: Path, extensions: list[str], base_name: str = "context") -> Path | None:
+    for ext in extensions:
+        context_path = root_path / f"{base_name}.{ext}"
+        if context_path.exists():
+            return context_path
+    return None
 
 
 class RetryProgressCallback(CustomLogger):
@@ -97,7 +110,8 @@ class Cli(CommonCliSettings):
 
     root_path: CliPositionalArg[Path]
     overwrite: bool = False
-    general_context_file: str | None = "context.json"
+    context_file_base: str = "context"
+    context_extensions: ClassVar[list[str]] = ["json", "md", "txt"]
 
     concurrency: int = settings.max_concurrency
 
@@ -158,27 +172,25 @@ class Cli(CommonCliSettings):
         successes = 0
         failures = 0
 
-        if self.general_context_file and (self.root_path / self.general_context_file).exists():
+        context_file_path = discover_context_file(self.root_path, self.context_extensions, self.context_file_base)
+        if context_file_path:
             self.logger.info(
-                "Loading general context from %s",
-                self.general_context_file,
+                "Loading context from %s",
+                format_display_path(context_file_path, self.root_path),
             )
-            async with await open_file(
-                self.root_path / self.general_context_file,
-                "r",
-                encoding="utf-8",
-            ) as f:
-                general_context = await f.read()
+            general_context = await load_context_file(context_file_path)
             self.logger.info(
-                "Loaded general context with length %d. Headings: %s. Tail: %s",
+                "Loaded context with length %d. Preview: %s... Tail: ...%s",
                 len(general_context),
-                general_context[:100],
-                general_context[-100:],
+                general_context[:100].replace("\n", "\\n"),
+                general_context[-100:].replace("\n", "\\n"),
             )
         else:
+            extensions_str = ",".join(self.context_extensions)
             self.logger.info(
-                "No general context file provided%s",
-                f": {self.root_path / self.general_context_file} does not exist" if self.general_context_file else "",
+                "No context file found (searched for %s.{%s})",
+                self.context_file_base,
+                extensions_str,
             )
             general_context = None
 
