@@ -1,10 +1,10 @@
-import dataclasses
-import json
 from collections.abc import AsyncGenerator, Iterable, Iterator
 from pathlib import Path
 from typing import override
 
-from anyio import open_file, to_thread
+import orjson
+from anyio import to_thread
+from anyio.streams.file import FileWriteStream
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment
 from pydantic import computed_field
@@ -60,7 +60,7 @@ class Cli(CommonCliSettings):
                 total=info.duration,
             )
 
-            async with await open_file(self.save_path, "w", encoding="utf-8") as f:
+            async with await FileWriteStream.from_path(self.save_path) as f:
                 async for segment in _iterate_segments(segments, progress, task_id):
                     self.logger.debug(
                         "[%s - %s] %s",
@@ -68,7 +68,7 @@ class Cli(CommonCliSettings):
                         segment.end,
                         segment.text,
                     )
-                    _ = await f.write(json.dumps(dataclasses.asdict(segment)) + "\n")
+                    await f.send(orjson.dumps(segment, option=orjson.OPT_APPEND_NEWLINE))
         self.logger.info("Transcription complete")
 
 
