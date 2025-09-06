@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(just type-check)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:docs.openvino.ai)"
     ],
     "deny": [],
     "ask": []
