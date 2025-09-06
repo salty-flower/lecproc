@@ -15,6 +15,7 @@ dependencies = [
     "litellm>=1.75.5.post1",
     # general deep-learning runtimes
     "torch>=2.8.0",
+    "orjson>=3.11.3",
 ]
 
 [dependency-groups]
