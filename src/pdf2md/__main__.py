@@ -129,9 +129,14 @@ class Cli(CommonCliSettings):
     @override
     async def cli_cmd(self) -> None:
         # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
-        if not self.model.startswith("openrouter/") and not litellm.utils.supports_pdf_input(self.model, None):
-            self.logger.error("Model '%s' does not support PDF input. Aborting.", self.model)
-            return
+        match self.model.split("/", 1):
+            case ["openrouter", _]:
+                # OpenRouter models are assumed to support PDF input
+                pass
+            case _:
+                if not litellm.utils.supports_pdf_input(self.model, None):
+                    self.logger.error("Model '%s' does not support PDF input. Aborting.", self.model)
+                    return
 
         pdf_files: list[Path] = discover_pdf_files(self.root_path)
         if not pdf_files:
