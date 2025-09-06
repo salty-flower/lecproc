@@ -20,7 +20,7 @@ from .settings import settings
 
 class Cli(CommonCliSettings):
     media_path: CliPositionalArg[Path]
-    save_path: CliPositionalArg[Path | None] = None
+    save_path: CliPositionalArg[Path]
 
     @computed_field
     @property
@@ -61,7 +61,7 @@ class Cli(CommonCliSettings):
             self.logger.info("Audio duration: %.2fs", float(duration))
 
         # Prepare output file if provided
-        output_path = str(self.save_path) if self.save_path is not None else None
+        output_path = str(self.save_path)
         if output_path:
             self.logger.info("Writing segments to %s", output_path)
 
@@ -75,17 +75,7 @@ class Cli(CommonCliSettings):
                 total=total_seconds if total_seconds is not None else None,
             )
 
-            if output_path:
-                async with await open_file(output_path, "w") as f:
-                    async for segment in _iterate_segments(segments, progress, task_id, total_seconds):
-                        self.logger.debug(
-                            "[%s - %s] %s",
-                            segment.start,
-                            segment.end,
-                            segment.text,
-                        )
-                        _ = await f.write(json.dumps(dataclasses.asdict(segment)) + "\n")
-            else:
+            async with await open_file(output_path, "w") as f:
                 async for segment in _iterate_segments(segments, progress, task_id, total_seconds):
                     self.logger.debug(
                         "[%s - %s] %s",
@@ -93,6 +83,7 @@ class Cli(CommonCliSettings):
                         segment.end,
                         segment.text,
                     )
+                    _ = await f.write(json.dumps(dataclasses.asdict(segment)) + "\n")
         self.logger.info("Transcription complete")
 
 
