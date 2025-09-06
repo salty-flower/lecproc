@@ -1,4 +1,5 @@
 import logging
+from asyncio.exceptions import CancelledError
 from typing import Any, ClassVar, override
 
 import anyio
@@ -34,6 +35,8 @@ class CommonCliSettings(BaseSettings):
         async def _main() -> None:
             try:
                 return await model.cli_cmd()
+            except CancelledError:
+                model.logger.info("Cancellation received. Exiting...")
             except KeyboardInterrupt:
                 model.logger.info("Keyboard interrupt received. Exiting...")
                 raise
