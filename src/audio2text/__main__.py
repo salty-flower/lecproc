@@ -6,7 +6,7 @@ from typing import override
 
 from anyio import open_file, to_thread
 from faster_whisper import WhisperModel
-from faster_whisper.transcribe import Segment, TranscriptionInfo
+from faster_whisper.transcribe import Segment
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
@@ -21,12 +21,13 @@ from .settings import settings
 class Cli(CommonCliSettings):
     media_path: CliPositionalArg[Path]
     save_path: CliPositionalArg[Path]
+    language: str | None = None
 
     @computed_field
     @property
     def model(self) -> WhisperModel:
         self.logger.info(
-            "Loading model '%s' (compute_type=%s) into %s",
+            "Loading model '%s' (compute_type=%s) from %s",
             settings.model_path,
             settings.compute_type,
             path_settings.models_download_dir.absolute(),
@@ -40,43 +41,27 @@ class Cli(CommonCliSettings):
     @override
     async def cli_cmd(self) -> None:
         segments, info = self.model.transcribe(  # pyright: ignore[reportUnknownMemberType]
-            str(self.media_path.absolute()), language="en"
+            str(self.media_path.absolute()), language=self.language
         )
 
-        # Log basic transcription info
-        info_typed: TranscriptionInfo = info  # type: ignore[assignment]
-        language: str | None = getattr(info_typed, "language", None)
-        language_probability: float | None = getattr(info_typed, "language_probability", None)
-        duration: float | None = getattr(info_typed, "duration", None)
-        if language is not None:
-            if language_probability is not None:
-                self.logger.info(
-                    "Detected language: %s (p=%.2f)",
-                    language,
-                    float(language_probability),
-                )
-            else:
-                self.logger.info("Detected language: %s", language)
-        if duration is not None:
-            self.logger.info("Audio duration: %.2fs", float(duration))
-
-        # Prepare output file if provided
-        output_path = str(self.save_path)
-        if output_path:
-            self.logger.info("Writing segments to %s", output_path)
+        self.logger.info(
+            "Detected language: %s (p=%.2f)",
+            info.language,
+            info.language_probability,
+        )
+        self.logger.info("Audio duration: %.2fs", info.duration)
+        self.logger.info("Writing segments to %s", self.save_path)
 
         progress = create_progress()
 
-        # If we know total duration, track progress against it. Otherwise, use an indeterminate bar.
-        total_seconds: float | None = float(duration) if duration is not None else None
         with progress:
             task_id: TaskID = progress.add_task(
                 "Transcribing",
-                total=total_seconds if total_seconds is not None else None,
+                total=info.duration,
             )
 
-            async with await open_file(output_path, "w") as f:
-                async for segment in _iterate_segments(segments, progress, task_id, total_seconds):
+            async with await open_file(self.save_path, "w", encoding="utf-8") as f:
+                async for segment in _iterate_segments(segments, progress, task_id):
                     self.logger.debug(
                         "[%s - %s] %s",
                         segment.start,
@@ -88,10 +73,7 @@ class Cli(CommonCliSettings):
 
 
 async def _iterate_segments(
-    segments: Iterable[Segment],
-    progress: Progress,
-    task_id: TaskID,
-    total_seconds: float | None,
+    segments: Iterable[Segment], progress: Progress, task_id: TaskID
 ) -> AsyncGenerator[Segment]:
     """Async-iterate over segments while updating progress.
 
@@ -113,14 +95,10 @@ async def _iterate_segments(
         if segment is None:
             break
 
-        # Update progress based on end timestamp if total is known; otherwise just advance by 1
-        if total_seconds is not None:
-            current_completed = float(segment.end)
-            if current_completed >= last_completed:
-                progress.update(task_id, completed=current_completed)
-                last_completed = current_completed
-        else:
-            progress.update(task_id, advance=1)
+        current_completed = float(segment.end)
+        if current_completed >= last_completed:
+            progress.update(task_id, completed=current_completed)
+            last_completed = current_completed
 
         yield segment
 
