@@ -272,10 +272,10 @@ async def _convert_one(
                         callbacks=[retry_callback],
                     )
             except (TimeoutError, CancelledError):
-                logger.error("Timed out after %s", settings.request_timeout_s)  # No need to log exception here
+                logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
                 return
             except InternalServerError:
-                logger.error("LLM API vendor boom")  # No need to log exception here
+                logger.error("LLM API vendor boom")  # noqa: TRY400
                 return
 
             text = cast(
