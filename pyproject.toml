@@ -12,7 +12,7 @@ dependencies = [
     # audio2text
     "faster-whisper>=1.2.0",
     # pdf2md
-    "litellm>=1.75.5.post1",
+    "litellm>=1.77.0",
     # general deep-learning runtimes
     "torch>=2.8.0",
     "orjson>=3.11.3",
