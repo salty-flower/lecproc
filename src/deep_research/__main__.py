@@ -1,21 +1,32 @@
+import hashlib
 from io import BytesIO
 from pathlib import Path
-from typing import Any, cast, override
+from typing import override
 
 import anyio
-import orjson
 from anyio import open_file
-from instructor.batch import BatchProcessor
 from litellm.utils import get_max_tokens
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletion, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
-from pydantic import computed_field
+from openai.types.responses import (
+    ResponseInputTextParam,
+    WebSearchPreviewToolParam,
+)
+from openai.types.responses.response_create_params import ResponseCreateParamsBase
+from openai.types.responses.response_input_param import Message, ResponseInputParam
+from pydantic import BaseModel, computed_field
 from pydantic_settings import CliPositionalArg
 
 from common_cli_settings import CommonCliSettings
 from logs import create_progress
 
 from .settings import deep_research_settings
+
+
+class MyBatchRequest(BaseModel):
+    custom_id: str
+    body: ResponseCreateParamsBase
+    url: str = "/v1/responses"
+    method: str = "POST"
 
 
 class Cli(CommonCliSettings):
@@ -27,13 +38,11 @@ class Cli(CommonCliSettings):
         async with await open_file(deep_research_settings.system_prompt_path, "r", encoding="utf-8") as f:
             return await f.read()
 
-
-    async def craft_request(self, prompt: str) -> list[ChatCompletionUserMessageParam | ChatCompletionSystemMessageParam]:
+    async def craft_request(self, prompt: str) -> ResponseInputParam:
         return [
-            ChatCompletionSystemMessageParam(content=await self.system_prompt, role="system"),
-            ChatCompletionUserMessageParam(content=prompt, role="user"),
+            Message(content=[ResponseInputTextParam(text=await self.system_prompt, type="input_text")], role="system"),
+            Message(content=[ResponseInputTextParam(text=prompt, type="input_text")], role="user"),
         ]
-
 
     @override
     async def cli_cmd(self) -> None:
@@ -42,37 +51,28 @@ class Cli(CommonCliSettings):
             async with await open_file(Path(prompt_file), "r", encoding="utf-8") as f:
                 prompts.append(await f.read())
 
-        self.logger.info(
-            "Loaded %d prompts. Preparing the batch request...", len(prompts)
-        )
-        bp = BatchProcessor(
-            model=deep_research_settings.model,
-            response_model=ChatCompletion,
-        )
-        jsonl_bytes = cast(
-            "BytesIO",
-            bp.create_batch_from_messages(
-                messages_list=[cast("list[dict[str, Any]]", await self.craft_request(prompt)) for prompt in prompts],
-                max_tokens=get_max_tokens(deep_research_settings.model),
-                temperature=1.0,
-            ),
-        )
-
-        # We don't really need a structured response.
-        # Parse the response as a list of JSON object separated by newlines
-        # For each object: remove the "body.response_format" key
-        self.logger.info("Removing response_format from requests")
-        parsed_requests = [
-            cast("dict[str, Any]", orjson.loads(request))
-            for request in jsonl_bytes.getvalue().decode("utf-8").splitlines()
-        ]
-        for request in parsed_requests:
-            del request["body"]["response_format"]
+        self.logger.info("Loaded %d prompts. Preparing the batch request...", len(prompts))
+        batch_requests: list[MyBatchRequest] = []
+        async for prompt, messages in ((prompt, await self.craft_request(prompt)) for prompt in prompts):
+            batch_request = MyBatchRequest(
+                custom_id=f"prompt-{hashlib.sha256(prompt.encode('utf-8')).hexdigest()}",
+                body=ResponseCreateParamsBase(
+                    model=deep_research_settings.model,
+                    input=messages,
+                    max_output_tokens=get_max_tokens(deep_research_settings.model),
+                    temperature=1.0,
+                    tools=[WebSearchPreviewToolParam(type="web_search_preview")],
+                ),
+            )
+            batch_requests.append(batch_request)
 
         # Upload the file to openai
         self.logger.info("Uploading file to openai")
         client = AsyncOpenAI(api_key=deep_research_settings.openai_api_key)
-        batch_file = await client.files.create(file=BytesIO(orjson.dumps(parsed_requests)), purpose="batch")
+        batch_file = await client.files.create(
+            file=BytesIO("\n".join(request.model_dump_json() for request in batch_requests).encode("utf-8")),
+            purpose="batch",
+        )
         batch_job = await client.batches.create(
             completion_window="24h",
             input_file_id=batch_file.id,
