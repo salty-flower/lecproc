@@ -3,7 +3,9 @@
     "allow": [
       "Bash(just type-check)",
       "WebSearch",
-      "WebFetch(domain:docs.openvino.ai)"
+      "WebFetch(domain:docs.openvino.ai)",
+      "Bash(jq:*)",
+      "Bash(uv add:*)",
     ],
     "deny": [],
     "ask": []
