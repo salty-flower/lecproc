@@ -255,7 +255,7 @@ async def _convert_one(
             async with await open_file(pdf_path, "rb") as f:
                 pdf_bytes = await f.read()
             base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-            messages: list[UserMessage | SystemMessage] = compose_pdf_user_messages(
+            messages: list[UserMessage | SystemMessage] = await compose_pdf_user_messages(
                 pdf_path.name, base64_pdf, general_context
             )
 
@@ -272,10 +272,10 @@ async def _convert_one(
                         callbacks=[retry_callback],
                     )
             except (TimeoutError, CancelledError):
-                logger.error("Timed out after %s", settings.request_timeout_s) # No need to log exception here
+                logger.error("Timed out after %s", settings.request_timeout_s)  # No need to log exception here
                 return
             except InternalServerError:
-                logger.error("LLM API vendor boom") # No need to log exception here
+                logger.error("LLM API vendor boom")  # No need to log exception here
                 return
 
             text = cast(
