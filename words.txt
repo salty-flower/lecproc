@@ -4,6 +4,7 @@ amsmath
 amssymb
 amstext
 basedpyright
+Beamer
 biomejs
 bordermatrix
 chemfig
