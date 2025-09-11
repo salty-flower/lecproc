@@ -16,6 +16,7 @@ dependencies = [
     # general deep-learning runtimes
     "torch>=2.8.0",
     "orjson>=3.11.3",
+    "openai>=1.107.1",
 ]
 
 [dependency-groups]
