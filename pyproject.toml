@@ -21,9 +21,9 @@ dependencies = [
 
 [dependency-groups]
 lint = [
-    "basedpyright>=1.31.1",
+    "basedpyright>=1.31.4",
     "mypy>=1.17.1",
-    "ruff>=0.12.8",
+    "ruff>=0.13.0",
 ]
 
 [tool.uv.sources]
