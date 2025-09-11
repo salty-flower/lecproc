@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,7 +8,6 @@ class DeepResearchSettings(BaseSettings):
 
     model: str = "o4-mini-deep-research"
     openai_api_key: str
-    system_prompt_path: Path = Path(__file__).parent / "system_prompt.md"
 
     citation_display_limit: int = 10
 

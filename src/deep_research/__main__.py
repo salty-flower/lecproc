@@ -57,11 +57,12 @@ class BatchResponse(BaseModel):
 class Cli(CommonCliSettings):
     prompt_files: CliPositionalArg[list[str] | None] = None
     batch_job_id: str | None = None
+    system_prompt_path: Path = Path(__file__).parent / "system_prompts" / "market_analysis.md"
 
     @computed_field
     @property
     async def system_prompt(self) -> str:
-        async with await open_file(deep_research_settings.system_prompt_path, "r", encoding="utf-8") as f:
+        async with await open_file(self.system_prompt_path, "r", encoding="utf-8") as f:
             return await f.read()
 
     @computed_field
