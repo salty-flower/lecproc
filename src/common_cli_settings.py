@@ -38,8 +38,10 @@ class CommonCliSettings(BaseSettings):
     async def cli_cmd_async(self) -> None: ...
 
     def cli_cmd(self) -> None:
-        """
-        default method for top-level
+        """Default method for top-level invocation.
+
+        If this class declares subcommands, delegate to the pydantic-settings
+        `CliApp.run_subcommand` helper. Otherwise run the async command path.
         """
         if self.has_subcommand():
             _ = CliApp.run_subcommand(self)
@@ -51,10 +53,7 @@ class CommonCliSettings(BaseSettings):
         cls().run_anyio()
 
     def run_anyio(self) -> None:
-        """Instantiate CLI settings and run `cli_cmd` under AnyIO with the Trio backend.
-
-        Returns the instantiated model for introspection/testing.
-        """
+        """Instantiate CLI settings and run `cli_cmd_async` under AnyIO."""
 
         async def _main() -> None:
             try:
