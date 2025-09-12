@@ -17,9 +17,6 @@ class CommonCliSettings(BaseSettings):
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
         configure_rich_logging(level=self.log_level)
-        # check if we're root. If yes, enable some parsing; else, no.
-        if self.has_subcommand():
-            self.__class__.model_config = SettingsConfigDict(env_file=".env", cli_parse_args=True)
 
     @classmethod
     def has_subcommand(cls) -> bool:
