@@ -1,7 +1,7 @@
 import logging
 from asyncio.exceptions import CancelledError
 from inspect import isclass
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 
 import anyio
 from pydantic import computed_field
@@ -10,9 +10,28 @@ from pydantic_settings.sources.types import _CliSubCommand
 
 from logs import configure_rich_logging, get_logger
 
+DEFAULT_MODEL_CONFIG: SettingsConfigDict = SettingsConfigDict(env_file=".env", arbitrary_types_allowed=True)
+
 
 class CommonCliSettings(BaseSettings):
+    """Base settings for CLI apps."""
+
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(**DEFAULT_MODEL_CONFIG)
     log_level: str = "INFO"
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:  # pyright: ignore[reportAny]  # noqa: ANN401
+        """
+        Set up `model_config` for subclasses based on their annotations.
+
+        If the subclass declares any `CliSubCommand[...]` annotated fields,
+        enable `cli_parse_args=True`
+        so pydantic-settings will parse CLI arguments and support subcommands.
+        Otherwise keep the default (no CLI parsing).
+        """
+        super().__init_subclass__(**kwargs)  # pyright: ignore[reportAny]
+
+        if cls.has_subcommand():
+            cls.model_config = SettingsConfigDict(**DEFAULT_MODEL_CONFIG, cli_parse_args=True)  # pyright: ignore[reportCallIssue]
 
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
