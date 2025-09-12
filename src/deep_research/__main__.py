@@ -316,24 +316,25 @@ class Create(CommonCliSettings):
 
     @computed_field
     @property
-    async def system_prompt(self) -> str:
-        async with await open_file(self.system_prompt_path, "r", encoding="utf-8") as f:
-            return await f.read()
-
-    @computed_field
-    @property
     def client(self) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=deep_research_settings.openai_api_key)
 
-    async def craft_request(self, prompt: str) -> ResponseInputParam:
+    async def load_system_prompt(self) -> str:
+        async with await open_file(self.system_prompt_path, "r", encoding="utf-8") as f:
+            return await f.read()
+
+    async def craft_request(self, system_prompt: str, prompt: str) -> ResponseInputParam:
         return [
-            Message(content=[ResponseInputTextParam(text=await self.system_prompt, type="input_text")], role="system"),
+            Message(content=[ResponseInputTextParam(text=system_prompt, type="input_text")], role="system"),
             Message(content=[ResponseInputTextParam(text=prompt, type="input_text")], role="user"),
         ]
 
     async def prepare_batch_requests(self, prompts: list[str]) -> list[MyBatchRequest]:
         batch_requests: list[MyBatchRequest] = []
-        async for prompt, messages in ((prompt, await self.craft_request(prompt)) for prompt in prompts):
+        # Use a simple for-loop and await craft_request for each prompt.
+        system_prompt = await self.load_system_prompt()
+        for prompt in prompts:
+            messages = await self.craft_request(system_prompt, prompt)
             batch_request = MyBatchRequest(
                 custom_id=f"prompt-{hashlib.sha256(prompt.encode('utf-8')).hexdigest()}",
                 body=ResponseCreateParamsBase(
