@@ -127,7 +127,7 @@ class Cli(CommonCliSettings):
         return settings.model
 
     @override
-    async def cli_cmd(self) -> None:
+    async def cli_cmd_async(self) -> None:
         # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
         match self.model.split("/", 1):
             case ["openrouter", _]:
@@ -298,4 +298,4 @@ async def _convert_one(
 
 
 if __name__ == "__main__":
-    _ = Cli.run_anyio()
+    _ = Cli.run_anyio_static()

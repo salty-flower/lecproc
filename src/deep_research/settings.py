@@ -1,5 +1,6 @@
 from typing import ClassVar
 
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,4 +13,13 @@ class DeepResearchSettings(BaseSettings):
     citation_display_limit: int = 10
 
 
-deep_research_settings = DeepResearchSettings()  # type: ignore[call-arg] # pyright: ignore[reportCallIssue]
+try:
+    deep_research_settings = DeepResearchSettings()  # type: ignore[call-arg] # pyright: ignore[reportCallIssue]
+except ValidationError:
+    import sys
+
+    from logs import get_logger
+
+    logger = get_logger(__name__)
+    logger.error("OpenAI API Key not set.")  # noqa: TRY400
+    sys.exit(1)

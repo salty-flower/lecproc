@@ -24,7 +24,7 @@ from openai.types.responses.response_create_params import ResponseCreateParamsBa
 from openai.types.responses.response_function_web_search import ActionFind, ActionOpenPage, ActionSearch
 from openai.types.responses.response_input_param import Message, ResponseInputParam
 from pydantic import BaseModel, ValidationError, computed_field
-from pydantic_settings import CliPositionalArg
+from pydantic_settings import CliApp, CliPositionalArg, CliSubCommand
 from rich.console import Console
 from rich.panel import Panel
 
@@ -54,27 +54,13 @@ class BatchResponse(BaseModel):
     error: dict[str, Any] | None = None
 
 
-class Cli(CommonCliSettings):
-    prompt_files: CliPositionalArg[list[str] | None] = None
-    batch_job_id: str | None = None
-    system_prompt_path: Path = Path(__file__).parent / "system_prompts" / "market_analysis.md"
-
-    @computed_field
-    @property
-    async def system_prompt(self) -> str:
-        async with await open_file(self.system_prompt_path, "r", encoding="utf-8") as f:
-            return await f.read()
+class Retrieve(CommonCliSettings):
+    batch_job_id: CliPositionalArg[str]
 
     @computed_field
     @property
     def client(self) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=deep_research_settings.openai_api_key)
-
-    async def craft_request(self, prompt: str) -> ResponseInputParam:
-        return [
-            Message(content=[ResponseInputTextParam(text=await self.system_prompt, type="input_text")], role="system"),
-            Message(content=[ResponseInputTextParam(text=prompt, type="input_text")], role="user"),
-        ]
 
     def fix_response_data(self, response_output: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Fix web_search_call items with broken action types
@@ -99,70 +85,6 @@ class Cli(CommonCliSettings):
             new_response_output.append(obj)
 
         return new_response_output
-
-    async def prepare_batch_requests(self, prompts: list[str]) -> list[MyBatchRequest]:
-        batch_requests: list[MyBatchRequest] = []
-        async for prompt, messages in ((prompt, await self.craft_request(prompt)) for prompt in prompts):
-            batch_request = MyBatchRequest(
-                custom_id=f"prompt-{hashlib.sha256(prompt.encode('utf-8')).hexdigest()}",
-                body=ResponseCreateParamsBase(
-                    model=deep_research_settings.model,
-                    input=messages,
-                    max_output_tokens=get_max_tokens(deep_research_settings.model),
-                    temperature=1.0,
-                    tools=[WebSearchPreviewToolParam(type="web_search_preview")],
-                ),
-            )
-            batch_requests.append(batch_request)
-        return batch_requests
-
-    async def busy_wait_for_batch_job(self, job: Batch, interval_s: float = 10.0) -> Batch:
-        progress = create_progress()
-        with progress:
-            task_id = progress.add_task(f"Waiting for batch job {job.id} to complete", total=None)
-            while True:
-                batch_job = await self.client.batches.retrieve(job.id)
-                progress.update(task_id, description=f"Waiting for batch job {batch_job.id}: {batch_job.status}")
-                if batch_job.status == "completed":
-                    return batch_job
-                await anyio.sleep(interval_s)
-
-    @override
-    async def cli_cmd(self) -> None:
-        if self.batch_job_id:
-            batch_job = await self.client.batches.retrieve(self.batch_job_id)
-            await self.show_batch_results(batch_job)
-            return
-
-        if self.prompt_files is None:
-            self.logger.error("No prompt files provided")
-            return
-
-        prompts: list[str] = []
-        for prompt_file in self.prompt_files:
-            async with await open_file(Path(prompt_file), "r", encoding="utf-8") as f:
-                prompts.append(await f.read())
-
-        self.logger.info("Loaded %d prompts. Preparing the batch request...", len(prompts))
-        batch_requests = await self.prepare_batch_requests(prompts)
-
-        # Upload the file to openai
-        self.logger.info("Uploading file to openai")
-        batch_file = await self.client.files.create(
-            file=BytesIO("\n".join(request.model_dump_json() for request in batch_requests).encode("utf-8")),
-            purpose="batch",
-        )
-        batch_job = await self.client.batches.create(
-            completion_window="24h",
-            input_file_id=batch_file.id,
-            endpoint="/v1/responses",
-        )
-        self.logger.info("Batch job created with ID %s", batch_job.id)
-        completed_job = await self.busy_wait_for_batch_job(batch_job)
-        self.logger.info("Batch job %s completed", completed_job.id)
-
-        # Retrieve and display results
-        await self.show_batch_results(completed_job)
 
     async def display_batch_result(self, console: Console, batch_result: BatchResponse, index: int) -> None:
         """Display detailed information for a single batch result."""
@@ -327,7 +249,7 @@ class Cli(CommonCliSettings):
                     content_parts.append(f"[bold]Citations ({len(content_item.annotations)}):[/bold]")
                     for ann_idx, annotation in enumerate(
                         content_item.annotations[: deep_research_settings.citation_display_limit], 1
-                    ):  # Show first 10
+                    ):  # Show first N
                         if annotation.type == "url_citation":
                             content_parts.append(
                                 f"  {ann_idx}. [{annotation.start_index}-{annotation.end_index}] {annotation.title}"
@@ -348,8 +270,11 @@ class Cli(CommonCliSettings):
         )
         console.print(panel)
 
-    async def show_batch_results(self, batch_job: Batch) -> None:
+    @override
+    async def cli_cmd_async(self) -> None:
         """Retrieve and display batch results in a TUI."""
+        # Get Batch object
+        batch_job = await self.client.batches.retrieve(self.batch_job_id)
         # Download results
         if not batch_job.output_file_id:
             self.logger.error("No output file ID in completed batch job")
@@ -385,5 +310,87 @@ class Cli(CommonCliSettings):
             await self.display_batch_result(console, batch_result, i)
 
 
+class Create(CommonCliSettings):
+    prompt_files: CliPositionalArg[list[str]]
+    system_prompt_path: Path = Path(__file__).parent / "system_prompts" / "market_analysis.md"
+
+    @computed_field
+    @property
+    async def system_prompt(self) -> str:
+        async with await open_file(self.system_prompt_path, "r", encoding="utf-8") as f:
+            return await f.read()
+
+    @computed_field
+    @property
+    def client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(api_key=deep_research_settings.openai_api_key)
+
+    async def craft_request(self, prompt: str) -> ResponseInputParam:
+        return [
+            Message(content=[ResponseInputTextParam(text=await self.system_prompt, type="input_text")], role="system"),
+            Message(content=[ResponseInputTextParam(text=prompt, type="input_text")], role="user"),
+        ]
+
+    async def prepare_batch_requests(self, prompts: list[str]) -> list[MyBatchRequest]:
+        batch_requests: list[MyBatchRequest] = []
+        async for prompt, messages in ((prompt, await self.craft_request(prompt)) for prompt in prompts):
+            batch_request = MyBatchRequest(
+                custom_id=f"prompt-{hashlib.sha256(prompt.encode('utf-8')).hexdigest()}",
+                body=ResponseCreateParamsBase(
+                    model=deep_research_settings.model,
+                    input=messages,
+                    max_output_tokens=get_max_tokens(deep_research_settings.model),
+                    temperature=1.0,
+                    tools=[WebSearchPreviewToolParam(type="web_search_preview")],
+                ),
+            )
+            batch_requests.append(batch_request)
+        return batch_requests
+
+    async def busy_wait_for_batch_job(self, job: Batch, interval_s: float = 10.0) -> Batch:
+        progress = create_progress()
+        with progress:
+            task_id = progress.add_task(f"Waiting for batch job {job.id} to complete", total=None)
+            while True:
+                batch_job = await self.client.batches.retrieve(job.id)
+                progress.update(task_id, description=f"Waiting for batch job {batch_job.id}: {batch_job.status}")
+                if batch_job.status == "completed":
+                    return batch_job
+                await anyio.sleep(interval_s)
+
+    @override
+    async def cli_cmd_async(self) -> None:
+        prompts: list[str] = []
+        for prompt_file in self.prompt_files:
+            async with await open_file(Path(prompt_file), "r", encoding="utf-8") as f:
+                prompts.append(await f.read())
+
+        self.logger.info("Loaded %d prompts. Preparing the batch request...", len(prompts))
+        batch_requests = await self.prepare_batch_requests(prompts)
+
+        # Upload the file to openai
+        self.logger.info("Uploading file to openai")
+        batch_file = await self.client.files.create(
+            file=BytesIO("\n".join(request.model_dump_json() for request in batch_requests).encode("utf-8")),
+            purpose="batch",
+        )
+        batch_job = await self.client.batches.create(
+            completion_window="24h",
+            input_file_id=batch_file.id,
+            endpoint="/v1/responses",
+        )
+        self.logger.info("Batch job created with ID %s", batch_job.id)
+        completed_job = await self.busy_wait_for_batch_job(batch_job)
+        self.logger.info("Batch job %s completed", completed_job.id)
+
+        # Display results using Retrieve subcommand logic
+        await Retrieve(log_level=self.log_level, batch_job_id=completed_job.id).cli_cmd_async()
+
+
+class Cli(CommonCliSettings):
+    create: CliSubCommand[Create]
+    retrieve: CliSubCommand[Retrieve]
+
+
 if __name__ == "__main__":
-    _ = Cli.run_anyio()
+    _ = CliApp.run(Cli)

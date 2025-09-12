@@ -39,7 +39,7 @@ class Cli(CommonCliSettings):
         )
 
     @override
-    async def cli_cmd(self) -> None:
+    async def cli_cmd_async(self) -> None:
         segments, info = self.model.transcribe(  # pyright: ignore[reportUnknownMemberType]
             str(self.media_path.absolute()), language=self.language
         )
@@ -104,4 +104,4 @@ async def _iterate_segments(
 
 
 if __name__ == "__main__":
-    _ = Cli.run_anyio()
+    Cli.run_anyio_static()
