@@ -19,6 +19,8 @@ dependencies = [
     "openai>=1.107.1",
     "typst>=0.13.7",
     "openai-agents[litellm]>=0.3.0",
+    "mistune>=3.1.4",
+    "regex>=2025.9.1",
 ]
 
 [dependency-groups]
@@ -26,6 +28,7 @@ lint = [
     "basedpyright>=1.31.4",
     "mypy>=1.17.1",
     "ruff>=0.13.0",
+    "types-regex>=2025.9.1.20250903",
 ]
 
 [tool.uv.sources]
