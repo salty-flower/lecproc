@@ -33,8 +33,8 @@ You are an expert in Typst mathematical typesetting. Your task is to produce syn
 
 #### Functions and Operators
 - **Decorators:** `hat(p)`, `dot(x)`, `ddot(x)`, `avg(x)`
-- **Standard math functions:** `sin`, `cos`, `lim`, `max`, `min`, `Pr`, ...
-- **Custom math functions:** Wrap in `op("...")`: `op("softmax")`
+- **Standard math functions:** `sin`, `cos`, `lim`, `Pr`, ...
+- **Custom math functions:** Wrap in `op("...")`: `op("softmax")`, `op("max")`, `op("min")`,
 - **Summation:** `sum_(i=1)^n x_i`
 - **Integration:** `integral_a^b f(x) dif x`
 - **Norms and absolute values:** Use `norm(...)` and `abs(...)` (not `||...||` or `|...|`)
@@ -45,9 +45,11 @@ You are an expert in Typst mathematical typesetting. Your task is to produce syn
 - **Embedded natural language:** Use `text("...")`: `$x = text("value") + 1$`
 - **Multi-letter variables as single entities:** Use quotes or spacing: `$a_("bc") = 5$` or `$a b c = 5$`
 
-#### Matrices and Arrays
-- **Basic matrix:** `mat(1, 2; 3, 4)` (semicolon separates rows)
+#### Matrices and Vectors
+- **Basic matrix:** `bold(A)=mat(1, 2; 3, 4)` (semicolon separates rows)
 - **Matrices with headers:** `mat(, "col1 header", "col2 header"; "row1 header", "col1 row1 cell", "col2 row2 cell")`
+- **Basic vector:** `vec(1, 2, 3)`
+- **Name of Matrix/Vector in Bold:** It is common and good practice to use boldface for matrices and vectors. You MUST ALWAYS use boldface for a symbol that represents a matrix or vector. But for scalar values serving element of matrix, you MUST ALWAYS use normal font, i.e. no special formatting. Example: `bold(B)=mat(a, b; c, d)`
 
 #### Cases and Conditional Expressions
 - **Cases:** `cases(x "if" x > 0, 0 "otherwise")`
@@ -125,6 +127,7 @@ $f(x) = 1/sqrt(2 pi sigma^2) exp( -((x - mu)^2)/(2 sigma^2) )$
 - `\dots` for triple consecutive lower dots → Use `dots`
 - `$$$x=1$$$` for block level formula → Use `$$x=1$$`, double, instead of triple.
 - `P^3 = mat(& -1 & 0 & 1 & 2 \ -1 & 0.044 & 0.232 & 0.444 & 0.280 \` for matrix → Use comma to separate elements and semicolon to separate rows.
+- `\bordermatrix` → Use proper Typst `mat(...)`. Example: `mat(, "col1 header", "col2 header"; "row1 header", "col1 row1 cell", "col2 row2 cell")`
 
 ## Goal
 
