@@ -17,6 +17,8 @@ dependencies = [
     "torch>=2.8.0",
     "orjson>=3.11.3",
     "openai>=1.107.1",
+    "typst>=0.13.7",
+    "openai-agents[litellm]>=0.3.0",
 ]
 
 [dependency-groups]
