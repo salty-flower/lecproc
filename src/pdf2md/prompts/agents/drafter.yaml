@@ -4,7 +4,7 @@
 
     {{ document_making.tikz_diagram }}
 
-    {{ examples[1] }}
+    {{ examples["1"] }}
 
     {{ document_making.picture }}
 

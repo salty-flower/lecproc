@@ -1,7 +1,5 @@
 """Modular prompt loading system with safe Jinja2 template rendering."""
 
-import asyncio
-import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -90,41 +88,20 @@ class AgentPrompt(BaseModel):
         return v
 
 
-class ComponentLoader:
-    """Lazy loader for prompt components in a specific category."""
-
-    def __init__(self, category: str, template_ctx: "TemplateContext") -> None:
-        self.category: str = category
-        self.template_ctx: TemplateContext = template_ctx
-        self._cache: dict[str, str] = {}
-
-    def __getattr__(self, name: str) -> str:
-        """Load component on attribute access (e.g., document_making.tikz_diagram)."""
-        if name.startswith("_"):
-            error_msg = f"'{self.__class__.__name__}' object has no attribute '{name}'"
-            raise AttributeError(error_msg)
-
-        cache_key = f"{self.category}.{name}"
-        if cache_key not in self._cache:
-            # Use asyncio.run to handle async loading in sync context
-            self._cache[cache_key] = asyncio.run(self.template_ctx.load_component(self.category, name))
-
-        return self._cache[cache_key]
-
-
-class ExampleLoader:
-    """Lazy loader for numbered examples."""
-
-    def __init__(self, template_ctx: "TemplateContext") -> None:
-        self.template_ctx: TemplateContext = template_ctx
-        self._cache: dict[int, str] = {}
-
-    def __getitem__(self, index: int) -> str:
-        """Load example by index (e.g., examples[1])."""
-        if index not in self._cache:
-            self._cache[index] = asyncio.run(self.template_ctx.load_example(index))
-
-        return self._cache[index]
+async def load_component_by_path(prompts_dir: Path, relative_path: str) -> str:
+    """Load a component by its relative path (e.g., 'document_making/basic_role' or 'examples/1')."""
+    file_path = prompts_dir / f"{relative_path}.md"
+    try:
+        if file_path.exists():
+            async with await anyio.open_file(file_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                return content.strip()
+        else:
+            logger.warning("Component file not found: %s", file_path)
+            return ""
+    except Exception:
+        logger.exception("Error loading component %s", relative_path)
+        return ""
 
 
 class TemplateContext:
@@ -133,76 +110,41 @@ class TemplateContext:
     def __init__(self, prompts_dir: Path) -> None:
         self.prompts_dir: Path = prompts_dir
         self._component_cache: dict[str, str] = {}
-        self._example_cache: dict[int, str] = {}
-
-    async def load_component(self, category: str, name: str) -> str:
-        """Load a component file from category/name.md."""
-        cache_key = f"{category}.{name}"
-        if cache_key not in self._component_cache:
-            file_path = self.prompts_dir / category / f"{name}.md"
-            try:
-                if file_path.exists():
-                    async with await anyio.open_file(file_path, "r", encoding="utf-8") as f:
-                        content = await f.read()
-                        self._component_cache[cache_key] = content.strip()
-                        logger.debug("Loaded component: %s", cache_key)
-                else:
-                    logger.warning("Component file not found: %s", file_path)
-                    self._component_cache[cache_key] = ""
-            except Exception:
-                logger.exception("Error loading component %s", cache_key)
-                self._component_cache[cache_key] = ""
-
-        return self._component_cache[cache_key]
-
-    async def load_example(self, index: int) -> str:
-        """Load an example by index from examples/N.md."""
-        if index not in self._example_cache:
-            examples_dir = self.prompts_dir / "examples"
-            file_path = examples_dir / f"{index}.md"
-            try:
-                if file_path.exists():
-                    async with await anyio.open_file(file_path, "r", encoding="utf-8") as f:
-                        content = await f.read()
-                        self._example_cache[index] = content.strip()
-                        logger.debug("Loaded example: %s", index)
-                else:
-                    logger.debug("Example file not found: %s", file_path)
-                    self._example_cache[index] = ""
-            except Exception:
-                logger.exception("Error loading example %s", index)
-                self._example_cache[index] = ""
-
-        return self._example_cache[index]
 
     async def get_context(self, **extra_vars: Any) -> dict[str, Any]:  # noqa: ANN401  # pyright: ignore[reportAny]
-        """Build safe context for template rendering."""
-        context = {
-            "document_making": ComponentLoader("document_making", self),
-            "typst": ComponentLoader("typst", self),
-            "examples": ExampleLoader(self),
-        }
+        """Build safe context for template rendering with nested component structure."""
+        context: dict[str, Any] = {}
+
+        # Pre-load all components recursively using nested structure
+        for file_path in self.prompts_dir.rglob("*.md"):
+            # Skip agent files as they're not components
+            if file_path.parent.name == "agents":
+                continue
+
+            # Create relative path (e.g., "document_making/basic_role", "examples/1")
+            relative_path = file_path.relative_to(self.prompts_dir).with_suffix("").as_posix()
+
+            # Check cache first
+            if relative_path not in self._component_cache:
+                content = await load_component_by_path(self.prompts_dir, relative_path)
+                self._component_cache[relative_path] = content
+
+            # Build nested structure: document_making/basic_role → context["document_making"]["basic_role"]
+            path_parts = relative_path.split("/")
+            current_level = context
+
+            for part in path_parts[:-1]:
+                if part not in current_level:
+                    current_level[part] = {}
+                current_level = current_level[part]
+
+            # Set the final content
+            current_level[path_parts[-1]] = self._component_cache[relative_path]
 
         # Add any extra variables passed in
         context.update(extra_vars)
 
         return context
-
-
-def discover_examples(prompts_dir: Path) -> dict[int, Path]:
-    """Discover numbered example files and return mapping of index to path."""
-    examples_dir = prompts_dir / "examples"
-    if not examples_dir.exists():
-        return {}
-
-    examples: dict[int, Path] = {}
-    for file_path in examples_dir.glob("*.md"):
-        match = re.match(r"^(\d+)\.md$", file_path.name)
-        if match:
-            index = int(match.group(1))
-            examples[index] = file_path
-
-    return dict(sorted(examples.items()))
 
 
 async def load_agent_prompt(agent_file: Path) -> AgentPrompt:
