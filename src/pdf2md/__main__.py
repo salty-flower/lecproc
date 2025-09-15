@@ -134,12 +134,12 @@ class Cli(CommonCliSettings):
     @computed_field
     @property
     def model(self) -> str:
-        return settings.model
+        return settings.drafting_model
 
     @override
     async def cli_cmd_async(self) -> None:
         # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
-        self.logger.info("Using %s", self.model)
+        self.logger.info("Using %s for drafting and %s for fixing", settings.drafting_model, settings.fixing_model)
         match self.model.split("/", 1):
             case ["openrouter", _]:
                 # OpenRouter models are assumed to support PDF input

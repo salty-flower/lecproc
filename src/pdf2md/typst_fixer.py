@@ -168,7 +168,7 @@ async def fix_typst_errors(
                     error_message=error_message,
                     location=location,
                     block_type=block_type,
-                    model=settings.model,
+                    model=settings.fixing_model,
                 )
             except (OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Exception during fix for content: %s", original_content[:50] + "...")

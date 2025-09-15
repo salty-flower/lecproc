@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model: str = "gemini/gemini-2.5-pro"
+    drafting_model: str = "openrouter/google/gemini-2.5-pro"
+    fixing_model: str = "openrouter/openrouter/sonoma-sky-alpha"
     max_concurrency: int = 16
     request_timeout_s: float = 600.0
     output_extension: str = "md"
