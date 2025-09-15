@@ -1,0 +1,17 @@
+- role: "system"
+  content: |
+    {{ document_making.basic_role }}
+
+    {{ document_making.tikz_diagram }}
+
+    {{ examples[1] }}
+
+    {{ document_making.picture }}
+
+    {{ typst.high_levels }}
+
+    {{ document_making.formula_env_selection }}
+
+    {{ document_making.escaping }}
+
+    {{ document_making.general_rules }}

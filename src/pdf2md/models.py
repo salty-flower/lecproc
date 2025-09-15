@@ -1,9 +1,7 @@
+from pathlib import Path
 from typing import Literal, TypedDict
 
-from anyio import open_file
-
-from .settings import settings
-from .typst_fixer import load_typst_instructions
+from .prompt_loader import get_rendered_agent
 
 
 class TextPart(TypedDict):
@@ -36,25 +34,22 @@ class UserMessage(TypedDict):
 async def compose_pdf_user_messages(
     pdf_file_name: str, base64_pdf: str, general_context: str | None = None
 ) -> list[SystemMessage | UserMessage]:
-    async with await open_file(settings.system_prompt_path, "r", encoding="utf-8") as f:
-        base_system_prompt = await f.read()
+    # Use the new modular prompt system
+    prompts_dir = Path(__file__).parent / "prompts"
+    rendered_messages = await get_rendered_agent("drafter", prompts_dir)
 
-    # Load and concatenate Typst instructions
-    typst_instructions = await load_typst_instructions()
+    # Convert rendered messages to the expected format
+    system_parts: list[ContentPart] = [
+        {"type": "text", "text": msg["content"]} for msg in rendered_messages if msg["role"] == "system"
+    ]
 
-    # Combine the base system prompt with Typst instructions
-    system_prompt = f"{base_system_prompt}\n\n{typst_instructions}"
+    system_message: SystemMessage = {
+        "role": "system",
+        "content": system_parts,
+    }
 
     draft: list[SystemMessage | UserMessage | None] = [
-        {
-            "role": "system",
-            "content": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                }
-            ],
-        },
+        system_message,
         {
             "role": "user",
             "content": [

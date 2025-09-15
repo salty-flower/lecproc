@@ -11,6 +11,7 @@ import orjson
 
 from logs import get_logger
 
+from .prompt_loader import get_rendered_agent
 from .settings import settings
 from .typst_parser import extract_typst_blocks, reconstruct_markdown_with_fixes
 from .typst_validator import TypstValidationResult, get_invalid_blocks, validate_all_typst_blocks
@@ -57,43 +58,21 @@ def _cleanup_progress_file(progress_file: Path) -> None:
         pass  # Ignore cleanup errors
 
 
-async def load_typst_instructions() -> str:
-    """Load Typst instructions from the comprehensive instructions file."""
-    async with await anyio.open_file(
-        Path(__file__).parent / "prompts" / "comprehensive_typst_instructions.md", "r", encoding="utf-8"
-    ) as f:
-        return await f.read()
-
-
 async def fix_single_typst_error(
     original_content: str, error_message: str, location: str, block_type: str, model: str
 ) -> str:
     """Fix a single Typst code error using LLM."""
-    system_prompt = await load_typst_instructions()
-
-    user_prompt = f"""Fix the following Typst code that has compilation errors:
-
-Location: {location}
-Block type: {block_type}
-
-Original content:
-```
-{original_content}
-```
-
-Error message:
-```
-{error_message}
-```
-
-Please provide the fixed Typst code ONLY.
-DO NOT emit any other text, not even Markdown formatting.
-Your response should be the correct, drop-in replacement for the original content.
-"""
-
     try:
-        # Use the model to generate a fix
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        # Use the new agent system to generate the prompt
+        prompts_dir = Path(__file__).parent / "prompts"
+        messages = await get_rendered_agent(
+            "fixer",
+            prompts_dir,
+            buggy_code=original_content,
+            block_type=block_type,
+            compiler_error_message=error_message,
+            location=location,
+        )
 
         response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
             model=model,
