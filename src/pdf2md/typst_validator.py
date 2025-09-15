@@ -1,5 +1,6 @@
 """Typst validation and parallel compilation utilities."""
 
+import sys
 from dataclasses import dataclass
 
 import anyio
@@ -43,7 +44,6 @@ async def validate_typst_block(block: TypstBlock, logger_name: str) -> TypstVali
         else:
             error_msg = f"Typst compilation error in {block.location}:\n{diagnostics}"
 
-        logger.warning("Typst validation failed for %s: %s", block.location, error_msg)
         return TypstValidationResult(block=block, is_valid=False, error_message=error_msg)
 
     except Exception as e:
@@ -53,7 +53,7 @@ async def validate_typst_block(block: TypstBlock, logger_name: str) -> TypstVali
 
 
 async def validate_all_typst_blocks(
-    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = 8
+    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = sys.maxsize
 ) -> list[TypstValidationResult]:
     """Validate all Typst blocks in parallel."""
     if not blocks:
