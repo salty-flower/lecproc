@@ -7,6 +7,10 @@ from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
+from agents.agent import Agent
+from agents.extensions.models.litellm_model import LitellmModel
+from agents.result import RunResult
+from agents.run import Runner
 from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
@@ -19,7 +23,8 @@ from logs import TaskID, create_progress, get_logger
 
 from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
-from .utils import discover_pdf_files, format_display_path, output_path_for
+from .utils import check_typst_syntax, discover_pdf_files, format_display_path, output_path_for
+
 
 
 async def load_context_file(context_path: Path) -> str:
