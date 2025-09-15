@@ -108,6 +108,8 @@ class Cli(CommonCliSettings):
     to a `.md` file with the same basename next to the source PDF.
     """
 
+    is_root: ClassVar[bool | None] = True
+
     root_path: CliPositionalArg[Path]
     overwrite: bool = False
     context_file_base: str = "context"

@@ -19,6 +19,8 @@ class CommonCliSettings(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(**DEFAULT_MODEL_CONFIG)
     log_level: str = "INFO"
 
+    is_root: ClassVar[bool | None] = None
+
     def __init_subclass__(cls, **kwargs: Any) -> None:  # pyright: ignore[reportAny]  # noqa: ANN401
         """
         Set up `model_config` for subclasses based on their annotations.
@@ -30,7 +32,7 @@ class CommonCliSettings(BaseSettings):
         """
         super().__init_subclass__(**kwargs)  # pyright: ignore[reportAny]
 
-        if cls.has_subcommand():
+        if cls.is_root or cls.has_subcommand():
             cls.model_config = SettingsConfigDict(**DEFAULT_MODEL_CONFIG, cli_parse_args=True)  # pyright: ignore[reportCallIssue]
 
     @override
