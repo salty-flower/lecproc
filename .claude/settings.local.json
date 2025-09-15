@@ -1,11 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(just type-check)",
+      "Bash(just check:*)",
+      "Bash(just format:*)",
       "WebSearch",
       "WebFetch(domain:docs.openvino.ai)",
       "Bash(jq:*)",
       "Bash(uv add:*)",
+      "Bash(dir:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(typst compile:*)"
     ],
     "deny": [],
     "ask": []
