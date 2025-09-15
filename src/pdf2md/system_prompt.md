@@ -53,65 +53,9 @@ In your output, you should enclose the diagram in a code block with the language
 
 If it's a picture, write a descriptive text right at where the picture is.
 
-## Typst for Formulas and Symbols
+## Mathematical Formulas
 
-Always write formulas and symbols in Typst format for modern mathematical typesetting.
-
-**Basic Typst Syntax:**
-
-- Use `$` for inline math: `$x + y = z$`
-- Use `$$` for block-level formulas
-- Function calls use `#` prefix: `#sum`, `#frac`, `#sqrt`, `#mat`
-- Subscripts and superscripts: `x_1`, `x^2`, `x_(i+1)`
-- Greek letters: `alpha`, `beta`, `gamma`, `pi`, `sigma`
-- Symbols: `arrow.r`, `subset.eq`, `infinity`, `times`, `div`
-
-**Block-Level Formulas:**
-
-- Use double dollar signs (`$$`) for block-level Typst formulas
-- Scenarios:
-- Formulas with **no text** before and after are likely block-level
-- Complex formulas with functions like `#sum`, `#integral`, `#mat` should be block-level
-
-**Common Typst Functions:**
-
-- Fractions: `#frac(numerator, denominator)`
-- Square roots: `#sqrt(expression)` or `#root(n, expression)`
-- Summation: `#sum_(i=1)^n x_i`
-- Integration: `#integral_a^b f(x) dif x`
-- Matrices: `#mat(delim: "(", 1, 2; 3, 4)` (semicolon separates rows)
-- Cases: `#cases(x "if" x > 0, 0 "otherwise")`
-
-**For Complex Typst Code:**
-
-When you need to write complex Typst mathematical expressions that might span multiple lines or use advanced features, enclose them in code blocks with `typ` language:
-
-```typ
-#let f(x) = #frac(1, #sqrt(2 pi sigma^2)) #exp(-#frac((x - mu)^2, 2 sigma^2))
-
-$ f(x) = #frac(1, #sqrt(2 pi sigma^2)) #exp(-#frac((x - mu)^2, 2 sigma^2)) $
-```
-
-### Vectors and matrices
-
-For vectors and matrices, write them in Boldface: `\bm{the symbol}`.
-When it's Latin and upright preferred, use `\mathbf{the content}`.
-
-### Border matrices
-
-$\bordermatrix$ isn't supported in MathJax. To bypass this, use $\mybordermatrix{<whatever content in the main matrix>}{<the leftmost column, serving as column headers>}{<the topmost row, serving as row headers>}$
-Example:
-$$
-\mathbf{P} =
-\mybordermatrix{
-P_0 & P_1 & P_2 & \cdots & P_m \\
-P_m & P_0 & P_1 & \cdots & P_{m-1} \\
-\vdots & \vdots & \vdots & \ddots & \vdots \\
-P_1 & P_2 & P_3 & \cdots & P_0
-}{0 \\ 1 \\ \vdots \\ m}{0&1&2&&\ldots&&m}
-$$
-
-Other matrices, for example, `pmatrix`, are still supported, so you don't need `mybordermatrix` for vectors.
+Write all mathematical formulas and symbols using appropriate markup. The system will apply the correct formatting for mathematical expressions during processing.
 
 ## Escaping
 

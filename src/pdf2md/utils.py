@@ -60,7 +60,8 @@ def check_typst_syntax(code: str) -> tuple[bool, typst.TypstError | list[typst.T
     compile_with_warnings = typst.compile_with_warnings
     try:
         # typst.compile_with_warnings(input) -> (compiled_bytes_or_none, list_of_TypstWarning)
-        _, warnings = compile_with_warnings(code)
+        # Encode string to bytes so it's treated as content, not file path
+        _, warnings = compile_with_warnings(code.encode("utf-8"))
         # Warnings do not make the syntax invalid. Return success.
     except typst.TypstError as te:
         return False, te

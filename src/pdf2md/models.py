@@ -3,6 +3,7 @@ from typing import Literal, TypedDict
 from anyio import open_file
 
 from .settings import settings
+from .typst_fixer import load_typst_instructions
 
 
 class TextPart(TypedDict):
@@ -36,7 +37,13 @@ async def compose_pdf_user_messages(
     pdf_file_name: str, base64_pdf: str, general_context: str | None = None
 ) -> list[SystemMessage | UserMessage]:
     async with await open_file(settings.system_prompt_path, "r", encoding="utf-8") as f:
-        system_prompt = await f.read()
+        base_system_prompt = await f.read()
+
+    # Load and concatenate Typst instructions
+    typst_instructions = await load_typst_instructions()
+
+    # Combine the base system prompt with Typst instructions
+    system_prompt = f"{base_system_prompt}\n\n{typst_instructions}"
 
     draft: list[SystemMessage | UserMessage | None] = [
         {

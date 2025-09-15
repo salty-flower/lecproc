@@ -259,80 +259,109 @@ async def _convert_one(
 
     try:
         output_path = output_path_for(pdf_path)
+        intermediate_path = output_path.with_suffix(".phase1.md")
 
-        async with semaphore:
-            async with await open_file(pdf_path, "rb") as f:
-                pdf_bytes = await f.read()
-            base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-            messages: list[UserMessage | SystemMessage] = await compose_pdf_user_messages(
-                pdf_path.name, base64_pdf, general_context
-            )
-
-            # Create retry progress callback
-            retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
-
-            # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
+        # Check if Phase 1 was already completed (intermediate file exists)
+        text: str | None = None
+        if intermediate_path.exists():
             try:
-                with anyio.fail_after(settings.request_timeout_s):
-                    response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
-                        model=model,
-                        messages=messages,
-                        num_retries=settings.max_retry_attempts - 1,
-                        callbacks=[retry_callback],
-                    )
-            except (TimeoutError, CancelledError):
-                logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
-                return
-            except InternalServerError:
-                logger.error("LLM API vendor boom")  # noqa: TRY400
-                return
-
-            text = cast(
-                "list[litellm.Choices]",
-                cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
-            )[0].message.content
-
-            # Phase 2: Typst validation and fixing
-            if text:
-                logger.info("Phase 2: Validating and fixing Typst content for %s", pdf_path.name)
-
-                # Extract Typst blocks from the generated markdown
-                typst_blocks = extract_typst_blocks(text)
-
-                if typst_blocks:
-                    logger.info("Found %d Typst block(s) in %s", len(typst_blocks), pdf_path.name)
-
-                    # Check for Typst compilation errors
-                    has_errors, _error_message = await has_any_typst_errors(typst_blocks, logger_name)
-
-                    if has_errors:
-                        logger.warning("Found Typst errors in %s, attempting to fix", pdf_path.name)
-
-                        # Attempt to fix errors iteratively
-                        fixed_text, all_fixed = await fix_typst_errors_iteratively(
-                            text, logger_name, max_iterations=2, max_fix_attempts=3
-                        )
-
-                        if all_fixed:
-                            logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
-                            text = fixed_text
-                        else:
-                            logger.warning(
-                                "Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name
-                            )
-                            text = fixed_text
-                    else:
-                        logger.info("All Typst blocks validated successfully for %s", pdf_path.name)
+                async with await open_file(intermediate_path, "r", encoding="utf-8") as f:
+                    text = await f.read()
+                if text:
+                    logger.info("Found existing Phase 1 output, skipping to Phase 2: %s", intermediate_path.name)
                 else:
-                    logger.info("No Typst blocks found in %s", pdf_path.name)
+                    # Empty file, remove it and proceed with Phase 1
+                    with contextlib.suppress(OSError):
+                        intermediate_path.unlink(missing_ok=True)
+                    text = None
+            except (OSError, UnicodeDecodeError):
+                # If we can't read the file, remove it and proceed with Phase 1
+                with contextlib.suppress(OSError):
+                    intermediate_path.unlink(missing_ok=True)
+                text = None
 
-                # Write result
-                async with await open_file(output_path, "w", encoding="utf-8") as f:
-                    _ = await f.write(text)
+        # Phase 1: Only run if we don't have existing intermediate content
+        if text is None:
+            async with semaphore:
+                async with await open_file(pdf_path, "rb") as f:
+                    pdf_bytes = await f.read()
+                base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+                messages: list[UserMessage | SystemMessage] = await compose_pdf_user_messages(
+                    pdf_path.name, base64_pdf, general_context
+                )
 
-                logger.info("Converted: %s -> %s", pdf_path.name, output_path.name)
+                # Create retry progress callback
+                retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
+
+                # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
+                try:
+                    with anyio.fail_after(settings.request_timeout_s):
+                        response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+                            model=model,
+                            messages=messages,
+                            num_retries=settings.max_retry_attempts - 1,
+                            callbacks=[retry_callback],
+                        )
+                except (TimeoutError, CancelledError):
+                    logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
+                    return
+                except InternalServerError:
+                    logger.error("LLM API vendor boom")  # noqa: TRY400
+                    return
+
+                text = cast(
+                    "list[litellm.Choices]",
+                    cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
+                )[0].message.content
+
+                # Save intermediate markdown after Phase 1 (before Typst validation)
+                if text:
+                    async with await open_file(intermediate_path, "w", encoding="utf-8") as f:
+                        _ = await f.write(text)
+                    logger.info("Phase 1 complete: Saved intermediate markdown to %s", intermediate_path.name)
+
+        # Phase 2: Typst validation and fixing
+        if text:
+            logger.info("Phase 2: Validating and fixing Typst content for %s", pdf_path.name)
+
+            # Extract Typst blocks from the generated markdown
+            typst_blocks = extract_typst_blocks(text)
+
+            if typst_blocks:
+                logger.info("Found %d Typst block(s) in %s", len(typst_blocks), pdf_path.name)
+
+                # Check for Typst compilation errors
+                has_errors, _error_message = await has_any_typst_errors(typst_blocks, logger_name)
+
+                if has_errors:
+                    logger.warning("Found Typst errors in %s, attempting to fix", pdf_path.name)
+
+                    # Attempt to fix errors iteratively
+                    fixed_text, all_fixed = await fix_typst_errors_iteratively(
+                        text, logger_name, max_iterations=2, max_fix_attempts=3
+                    )
+
+                    if all_fixed:
+                        logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
+                        text = fixed_text
+                    else:
+                        logger.warning(
+                            "Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name
+                        )
+                        text = fixed_text
+                else:
+                    logger.info("All Typst blocks validated successfully for %s", pdf_path.name)
             else:
-                logger.warning("No text returned for %s", pdf_path.name)
+                logger.info("No Typst blocks found in %s", pdf_path.name)
+
+            # Write result
+            async with await open_file(output_path, "w", encoding="utf-8") as f:
+                _ = await f.write(text)
+            intermediate_path.unlink()
+
+            logger.info("Converted: %s -> %s. Removed intermediate file", pdf_path.name, output_path.name)
+        else:
+            logger.warning("No text returned for %s", pdf_path.name)
     except Exception:
         logger.exception("Failed to convert %s", pdf_path)
     finally:

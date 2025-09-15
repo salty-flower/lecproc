@@ -1,8 +1,10 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import re as re_
+from pathlib import Path
 from typing import cast
 
+import anyio
 import litellm
 from regex import regex as re
 
@@ -15,29 +17,19 @@ from .typst_validator import TypstValidationResult, get_invalid_blocks, validate
 ReMatch = str | tuple[str, str]
 
 
+async def load_typst_instructions() -> str:
+    """Load Typst instructions from the comprehensive instructions file."""
+    async with await anyio.open_file(
+        Path(__file__).parent / "prompts" / "comprehensive_typst_instructions.md", "r", encoding="utf-8"
+    ) as f:
+        return await f.read()
+
+
 async def fix_single_typst_error(
     original_content: str, error_message: str, location: str, block_type: str, model: str
 ) -> str:
     """Fix a single Typst code error using LLM."""
-    system_prompt = """You are an expert in Typst mathematical typesetting. Your task is to fix Typst compilation errors.
-
-When given Typst code with compilation errors, you should:
-
-1. Analyze the error message to understand what's wrong
-2. Fix the syntax or semantic issues in the Typst code
-3. Ensure the fixed code follows proper Typst syntax
-4. Provide a brief explanation of what you fixed
-
-Key Typst syntax reminders:
-- Functions are called with # prefix: #sum, #frac, #sqrt, etc.
-- Math expressions can use $ for inline: $x + y$
-- Matrices use #mat(): #mat(delim: "(", 1, 2; 3, 4)
-- Fractions use #frac(): #frac(numerator, denominator)
-- Subscripts and superscripts: x_1, x^2
-- Greek letters: alpha, beta, gamma, etc.
-- Symbols: arrow.r, subset.eq, infinity, etc.
-
-Only return the corrected Typst code - do not change the mathematical meaning, just fix syntax errors."""
+    system_prompt = await load_typst_instructions()
 
     user_prompt = f"""Fix the following Typst code that has compilation errors:
 
