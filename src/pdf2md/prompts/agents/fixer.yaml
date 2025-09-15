@@ -16,6 +16,9 @@
   content: |
     **Block Type:** {{ block_type }}
 
+    **Context:**
+    {{ context }}
+
     **Buggy Code Snippet:**
     `{{ buggy_code }}`
 

@@ -1,19 +1,18 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
-import json
 from pathlib import Path
 from typing import cast
 
 import anyio
 import litellm
-import orjson
 
 from logs import get_logger
 
+from .fix_progress import TypstFixEntry, TypstFixProgress
 from .prompt_loader import get_rendered_agent
 from .settings import settings
-from .typst_parser import extract_typst_blocks, reconstruct_markdown_with_fixes
+from .typst_parser import TypstBlock, extract_typst_blocks, reconstruct_markdown_with_fixes
 from .typst_validator import TypstValidationResult, get_invalid_blocks, validate_all_typst_blocks
 
 ReMatch = str | tuple[str, str]
@@ -27,51 +26,19 @@ def _get_progress_file_path(markdown_content: str) -> Path:
     return Path.cwd() / f".typst_fix_progress_{content_hash}.json"
 
 
-def _save_progress(progress_file: Path, fixed_mapping: dict[str, str]) -> None:
-    """Save the current progress to a file."""
-    try:
-        with progress_file.open("w", encoding="utf-8") as f:
-            json.dump(fixed_mapping, f, ensure_ascii=False, indent=2)
-    except (OSError, ValueError):
-        pass  # Ignore save errors to avoid disrupting the main process
-
-
-def _load_progress(progress_file: Path) -> dict[str, str]:
-    """Load existing progress from a file."""
-    if not progress_file.exists():
-        return {}
-
-    try:
-        with progress_file.open("r", encoding="utf-8") as f:
-            return cast("dict[str, str]", orjson.loads(f.read()))
-    except (OSError, ValueError, json.JSONDecodeError):
-        logger.exception("Failed to load progress from %s", progress_file)
-        return {}  # Return empty dict if loading fails
-
-
-def _cleanup_progress_file(progress_file: Path) -> None:
-    """Remove the progress file after successful completion."""
-    try:
-        if progress_file.exists():
-            progress_file.unlink()
-    except OSError:
-        pass  # Ignore cleanup errors
-
-
-async def fix_single_typst_error(
-    original_content: str, error_message: str, location: str, block_type: str, model: str
-) -> str:
-    """Fix a single Typst code error using LLM."""
+async def fix_single_typst_error(block: "TypstBlock", error_message: str, model: str) -> str:
+    """Fix a single Typst code error using LLM with proper block type context."""
     try:
         # Use the new agent system to generate the prompt
         prompts_dir = Path(__file__).parent / "prompts"
         messages = await get_rendered_agent(
             "fixer",
             prompts_dir,
-            buggy_code=original_content,
-            block_type=block_type,
+            buggy_code=block.content,  # Pure content without delimiters
+            block_type=block.type,  # "inline", "block", or "codeblock"
             compiler_error_message=error_message,
-            location=location,
+            location=block.location,
+            context=block.get_context_for_llm(),  # Context without AST paths
         )
 
         response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
@@ -86,9 +53,9 @@ async def fix_single_typst_error(
         )[0].message.content  # type: ignore[reportUnknownMemberType]
     except (OSError, RuntimeError, ValueError, TypeError):
         # Return original content if fixing fails to avoid breaking the document
-        return original_content
+        return block.content
     else:
-        return response_text or ""
+        return response_text.strip() if response_text else block.content
 
 
 async def fix_typst_errors(
@@ -110,25 +77,24 @@ async def fix_typst_errors(
 
     current_content = markdown_content
     progress_file = _get_progress_file_path(markdown_content)
+    content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()[:16]
 
     # Load existing progress
-    fixed_mapping: dict[str, str] = _load_progress(progress_file)
-    if fixed_mapping:
-        logger.info("Loaded %d existing fix(es) from progress file", len(fixed_mapping))
+    progress = TypstFixProgress.load_from_file(progress_file)
+    if progress is None:
+        progress = TypstFixProgress(content_hash=content_hash, fixes={})
+    else:
+        logger.info("Loaded %d existing fix(es) from progress file", len(progress.fixes))
 
-    # Group fixes by content to avoid duplicate work
-    unique_fixes: dict[str, tuple[str, str, str]] = {}  # content -> (error_message, location, block_type)
+    # Group fixes by content to avoid duplicate work, but keep block reference for type info
+    unique_fixes: dict[str, tuple[TypstBlock, str]] = {}  # content -> (block, error_message)
     for result in invalid_results:
         content_key = result.block.content
-        if content_key not in unique_fixes and content_key not in fixed_mapping:
-            unique_fixes[content_key] = (
-                result.error_message,
-                result.block.location,
-                result.block.block_type,
-            )
+        if content_key not in unique_fixes and content_key not in progress.fixes:
+            unique_fixes[content_key] = (result.block, result.error_message)
 
     for attempt in range(max_attempts):
-        remaining_fixes = {k: v for k, v in unique_fixes.items() if k not in fixed_mapping}
+        remaining_fixes = {k: v for k, v in unique_fixes.items() if k not in progress.fixes}
 
         if not remaining_fixes:
             break
@@ -139,14 +105,12 @@ async def fix_typst_errors(
         batch_size = min(settings.max_concurrency, len(remaining_fixes))
         fixes_list = list(remaining_fixes.items())
 
-        async def fix_single_wrapper(original_content: str, error_info: tuple[str, str, str]) -> tuple[str, str | None]:
-            error_message, location, block_type = error_info
+        async def fix_single_wrapper(original_content: str, fix_info: tuple[TypstBlock, str]) -> tuple[str, str | None]:
+            block, error_message = fix_info
             try:
                 fixed_content = await fix_single_typst_error(
-                    original_content=original_content,
+                    block=block,
                     error_message=error_message,
-                    location=location,
-                    block_type=block_type,
                     model=settings.fixing_model,
                 )
             except (OSError, RuntimeError, ValueError, TypeError):
@@ -160,21 +124,28 @@ async def fix_typst_errors(
             batch_results: dict[str, str | None] = {}
 
             async def collect_result(
-                original_content: str, error_info: tuple[str, str, str], results: dict[str, str | None]
+                original_content: str, fix_info: tuple["TypstBlock", str], results: dict[str, str | None]
             ) -> None:
-                _, fixed_content = await fix_single_wrapper(original_content, error_info)
+                _, fixed_content = await fix_single_wrapper(original_content, fix_info)
                 results[original_content] = fixed_content
 
             # Process all tasks in the batch using task group
             async with anyio.create_task_group() as tg:
-                for original_content, error_info in batch:
-                    tg.start_soon(collect_result, original_content, error_info, batch_results)
+                for original_content, fix_info in batch:
+                    tg.start_soon(collect_result, original_content, fix_info, batch_results)
 
             # Process batch results
             batch_progress = False
             for original_content, fixed_content in batch_results.items():
                 if fixed_content is not None and fixed_content != original_content:
-                    fixed_mapping[original_content] = fixed_content
+                    # Find the corresponding block to get AST path and type
+                    block, _ = remaining_fixes[original_content]
+                    progress.fixes[original_content] = TypstFixEntry(
+                        original_content=original_content,
+                        fixed_content=fixed_content,
+                        ast_path=block.ast_path,
+                        block_type=block.type,
+                    )
                     logger.info("Successfully fixed Typst block: %s", original_content[:50] + "...")
                     batch_progress = True
                 elif fixed_content is not None:
@@ -182,27 +153,30 @@ async def fix_typst_errors(
 
             # Save progress after each batch
             if batch_progress:
-                _save_progress(progress_file, fixed_mapping)
-                logger.debug("Saved progress: %d fixes completed", len(fixed_mapping))
+                progress.save_to_file(progress_file)
+                logger.debug("Saved progress: %d fixes completed", len(progress.fixes))
 
         # If we made some progress, break
-        if fixed_mapping:
+        if progress.fixes:
             break
 
     # Apply fixes to markdown content
-    if fixed_mapping:
+    if progress.fixes:
+        # Convert TypstFixEntry back to simple mapping for reconstruction
+        fixed_contents = {entry.original_content: entry.fixed_content for entry in progress.fixes.values()}
+
         # Extract all blocks (not just invalid ones) for reconstruction
         all_blocks = [result.block for result in validation_results]
-        current_content = reconstruct_markdown_with_fixes(current_content, all_blocks, fixed_mapping)
+        current_content = reconstruct_markdown_with_fixes(current_content, all_blocks, fixed_contents)
 
-        logger.info("Applied %d Typst fix(es) to markdown content", len(fixed_mapping))
+        logger.info("Applied %d Typst fix(es) to markdown content", len(progress.fixes))
 
         # Clean up progress file on successful completion
-        all_fixed = len(fixed_mapping) >= len(unique_fixes)
+        all_fixed = len(progress.fixes) >= len(unique_fixes)
         if all_fixed:
-            _cleanup_progress_file(progress_file)
+            progress.cleanup_file(progress_file)
 
-    all_fixed = len(fixed_mapping) >= len(unique_fixes)
+    all_fixed = len(progress.fixes) >= len(unique_fixes)
     return current_content, all_fixed
 
 

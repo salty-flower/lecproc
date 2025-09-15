@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     output_extension: str = "md"
     max_retry_attempts: int = 5
 
+    # Context configuration for fixing
+    context_lines: int = 5  # Number of context lines before/after Typst blocks for LLM fixing
+
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
         self.system_prompt_path = self.system_prompt_path.resolve().absolute()

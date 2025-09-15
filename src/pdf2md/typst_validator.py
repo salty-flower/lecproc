@@ -24,13 +24,16 @@ class TypstValidationResult:
 
 
 async def validate_typst_block(block: TypstBlock, logger_name: str) -> TypstValidationResult:
-    """Validate a single Typst block asynchronously."""
+    """Validate a single Typst block asynchronously using proper validation form."""
     logger = get_logger(logger_name)
 
     try:
+        # Get the proper form for Typst compiler validation
+        validation_content = block.get_validation_form()
+
         # Run the validation in a thread pool to avoid blocking
         def _validate() -> tuple[bool, typst.TypstError | list[typst.TypstWarning] | str]:
-            return check_typst_syntax(block.content)
+            return check_typst_syntax(validation_content)
 
         is_valid, diagnostics = await to_thread.run_sync(_validate)
 
