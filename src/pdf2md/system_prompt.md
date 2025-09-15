@@ -55,7 +55,10 @@ If it's a picture, write a descriptive text right at where the picture is.
 
 ## Mathematical Formulas
 
-Write all mathematical formulas and symbols using appropriate markup. The system will apply the correct formatting for mathematical expressions during processing.
+Write all mathematical formulas and symbols using **Typst**.
+You are PROHIBITTED to write LaTeX for formulas.
+Detailed instructions attached below.
+PAY FULL ATTENTION TO THE DETAILS. DO NOT HOLD BACK. GIVE IT YOU ALL.
 
 ## Escaping
 

@@ -2,14 +2,12 @@
 
 import hashlib
 import json
-import re as re_
 from pathlib import Path
 from typing import cast
 
 import anyio
 import litellm
 import orjson
-from regex import regex as re
 
 from logs import get_logger
 
@@ -88,7 +86,10 @@ Error message:
 {error_message}
 ```
 
-Please provide the fixed Typst code and a brief explanation of what you changed."""
+Please provide the fixed Typst code ONLY.
+DO NOT emit any other text, not even Markdown formatting.
+Your response should be the correct, drop-in replacement for the original content.
+"""
 
     try:
         # Use the model to generate a fix
@@ -104,40 +105,11 @@ Please provide the fixed Typst code and a brief explanation of what you changed.
             "list[litellm.Choices]",
             cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
         )[0].message.content  # type: ignore[reportUnknownMemberType]
-
-        return _extract_fixed_code((response_text or "").strip(), original_content)
-
     except (OSError, RuntimeError, ValueError, TypeError):
         # Return original content if fixing fails to avoid breaking the document
         return original_content
-
-
-def _extract_fixed_code(response: str, original: str) -> str:
-    """Extract the fixed code from the LLM response."""
-    # Try to find code blocks marked with ```
-    code_blocks: list[str] = re.findall(r"```(?:typ|typst)?\n(.*?)\n```", response, re_.DOTALL)
-    if code_blocks:
-        return code_blocks[0].strip()
-
-    # Try to find code blocks without language specification
-    code_blocks = re.findall(r"```\n(.*?)\n```", response, re_.DOTALL)
-    if code_blocks:
-        return code_blocks[0].strip()
-
-    # If no code blocks found, try to extract everything after "Fixed:" or similar
-    patterns = [
-        r"(?:Fixed|Corrected|Solution):\s*\n(.*?)(?:\n\n|$)",
-        r"(?:Here\'s the fix|The fix is):\s*\n(.*?)(?:\n\n|$)",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, response, re_.DOTALL | re_.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-
-    # If all else fails, return the original content
-    # This prevents breaking the document further
-    return original
+    else:
+        return response_text or ""
 
 
 async def fix_typst_errors(
