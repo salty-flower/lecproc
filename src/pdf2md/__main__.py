@@ -10,6 +10,7 @@ import litellm
 from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
@@ -138,6 +139,7 @@ class Cli(CommonCliSettings):
     @override
     async def cli_cmd_async(self) -> None:
         # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
+        self.logger.info("Using %s", self.model)
         match self.model.split("/", 1):
             case ["openrouter", _]:
                 # OpenRouter models are assumed to support PDF input
@@ -305,7 +307,7 @@ async def _convert_one(
                 except (TimeoutError, CancelledError):
                     logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
                     return
-                except InternalServerError:
+                except (InternalServerError, VertexAIError):
                     logger.error("LLM API vendor boom")  # noqa: TRY400
                     return
 
