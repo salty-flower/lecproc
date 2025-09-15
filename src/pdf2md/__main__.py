@@ -7,10 +7,6 @@ from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
-from agents.agent import Agent
-from agents.extensions.models.litellm_model import LitellmModel
-from agents.result import RunResult
-from agents.run import Runner
 from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
@@ -23,8 +19,10 @@ from logs import TaskID, create_progress, get_logger
 
 from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
-from .utils import check_typst_syntax, discover_pdf_files, format_display_path, output_path_for
-
+from .typst_fixer import fix_typst_errors_iteratively
+from .typst_parser import extract_typst_blocks
+from .typst_validator import has_any_typst_errors
+from .utils import discover_pdf_files, format_display_path, output_path_for
 
 
 async def load_context_file(context_path: Path) -> str:
@@ -107,10 +105,14 @@ def plan_processing(
 
 
 class Cli(CommonCliSettings):
-    """Bulk PDF → Markdown via LiteLLM document understanding.
+    """Bulk PDF → Markdown with Typst formulas via LiteLLM document understanding.
 
-    Naively sends the raw PDF (base64) to the model and writes the response
-    to a `.md` file with the same basename next to the source PDF.
+    Two-phase process:
+    1. Initial drafting: Sends the raw PDF (base64) to the model for Markdown conversion
+    2. Typst validation: Parses output for Typst formulas/code blocks, validates syntax,
+       and uses LLM to fix any compilation errors iteratively.
+
+    Writes the final result to a `.md` file with the same basename next to the source PDF.
     """
 
     is_root: ClassVar[bool | None] = True
@@ -290,8 +292,41 @@ async def _convert_one(
                 cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
             )[0].message.content
 
-            # Write result
+            # Phase 2: Typst validation and fixing
             if text:
+                logger.info("Phase 2: Validating and fixing Typst content for %s", pdf_path.name)
+
+                # Extract Typst blocks from the generated markdown
+                typst_blocks = extract_typst_blocks(text)
+
+                if typst_blocks:
+                    logger.info("Found %d Typst block(s) in %s", len(typst_blocks), pdf_path.name)
+
+                    # Check for Typst compilation errors
+                    has_errors, _error_message = await has_any_typst_errors(typst_blocks, logger_name)
+
+                    if has_errors:
+                        logger.warning("Found Typst errors in %s, attempting to fix", pdf_path.name)
+
+                        # Attempt to fix errors iteratively
+                        fixed_text, all_fixed = await fix_typst_errors_iteratively(
+                            text, logger_name, max_iterations=2, max_fix_attempts=3
+                        )
+
+                        if all_fixed:
+                            logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
+                            text = fixed_text
+                        else:
+                            logger.warning(
+                                "Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name
+                            )
+                            text = fixed_text
+                    else:
+                        logger.info("All Typst blocks validated successfully for %s", pdf_path.name)
+                else:
+                    logger.info("No Typst blocks found in %s", pdf_path.name)
+
+                # Write result
                 async with await open_file(output_path, "w", encoding="utf-8") as f:
                     _ = await f.write(text)
 

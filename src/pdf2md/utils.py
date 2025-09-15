@@ -62,9 +62,7 @@ def check_typst_syntax(code: str) -> tuple[bool, typst.TypstError | list[typst.T
         # typst.compile_with_warnings(input) -> (compiled_bytes_or_none, list_of_TypstWarning)
         _, warnings = compile_with_warnings(code)
         # Warnings do not make the syntax invalid. Return success.
-        return True, warnings
     except typst.TypstError as te:
         return False, te
-    except Exception as exc:
-        # Any other unexpected exception is surfaced as a diagnostics string.
-        return False, str(exc)
+    else:
+        return True, warnings
