@@ -38,7 +38,7 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             block_type=block.type,  # "inline", "block", or "codeblock"
             compiler_error_message=error_message,
             location=block.location,
-            context=block.get_context_for_llm(),  # Context without AST paths
+            surrounding_context=block.get_context_for_llm(),  # Context without AST paths
         )
 
         response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]

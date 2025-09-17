@@ -17,7 +17,7 @@
     **Block Type:** {{ block_type }}
 
     **Context:**
-    {{ context }}
+    {{ surrounding_context }}
 
     **Buggy Code Snippet:**
     `{{ buggy_code }}`
