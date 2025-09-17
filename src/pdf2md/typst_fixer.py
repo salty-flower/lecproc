@@ -80,7 +80,7 @@ async def fix_typst_errors(
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()[:16]
 
     # Load existing progress
-    progress = TypstFixProgress.load_from_file(progress_file)
+    progress = await TypstFixProgress.load_from_file(progress_file)
     if progress is None:
         progress = TypstFixProgress(content_hash=content_hash, fixes={})
     else:
@@ -153,8 +153,10 @@ async def fix_typst_errors(
 
             # Save progress after each batch
             if batch_progress:
-                progress.save_to_file(progress_file)
-                logger.debug("Saved progress: %d fixes completed", len(progress.fixes))
+                save_return_code = await progress.save_to_file(progress_file)
+                logger.debug(
+                    "Saved progress: %d fixes completed with return code %d", len(progress.fixes), save_return_code
+                )
 
         # If we made some progress, break
         if progress.fixes:

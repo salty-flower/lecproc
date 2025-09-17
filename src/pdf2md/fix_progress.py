@@ -1,8 +1,8 @@
 """Models for tracking Typst fix progress with AST-based reconstruction."""
 
 from pathlib import Path
-from typing import Any
 
+import anyio
 import orjson
 from pydantic import BaseModel
 
@@ -22,26 +22,21 @@ class TypstFixProgress(BaseModel):
     content_hash: str
     fixes: dict[str, TypstFixEntry]  # content -> fix entry
 
-    def save_to_file(self, progress_file: Path) -> None:
+    async def save_to_file(self, progress_file: Path) -> int:
         """Save progress to file using orjson for performance."""
-        try:
-            with progress_file.open("wb") as f:
-                f.write(orjson.dumps(self.model_dump(), option=orjson.OPT_INDENT_2))
-        except (OSError, ValueError):
-            pass  # Ignore save errors to avoid disrupting the main process
+
+        async with await anyio.open_file(progress_file, "wb") as f:
+            return await f.write(orjson.dumps(self.model_dump(), option=orjson.OPT_INDENT_2))
 
     @classmethod
-    def load_from_file(cls, progress_file: Path) -> "TypstFixProgress | None":
+    async def load_from_file(cls, progress_file: Path) -> "TypstFixProgress | None":
         """Load progress from file, return None if not found or corrupted."""
         if not progress_file.exists():
             return None
 
-        try:
-            with progress_file.open("rb") as f:
-                data = orjson.loads(f.read())
-                return cls.model_validate(data)
-        except (OSError, ValueError, orjson.JSONDecodeError):
-            return None
+        async with await anyio.open_file(progress_file, "rb") as f:
+            data = await f.read()
+            return cls.model_validate(orjson.loads(data))
 
     def cleanup_file(self, progress_file: Path) -> None:
         """Remove the progress file after successful completion."""
