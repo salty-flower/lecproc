@@ -51,8 +51,9 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             "list[litellm.Choices]",
             cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
         )[0].message.content  # type: ignore[reportUnknownMemberType]
-    except (OSError, RuntimeError, ValueError, TypeError):
-        # Return original content if fixing fails to avoid breaking the document
+    except (TimeoutError, litellm.exceptions.InternalServerError) as e:
+        # Only catch the same humble set as main module
+        logger.warning("LLM error in fix_single_typst_error: %s", e)
         return block.content
     else:
         return response_text.strip() if response_text else block.content
