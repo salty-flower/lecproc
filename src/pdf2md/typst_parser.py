@@ -1,11 +1,15 @@
 """Typst parsing and validation utilities for markdown documents."""
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, override
 
 import mistune
+from mistune.core import BlockState
+from mistune.renderers.markdown import MarkdownRenderer
 from pydantic import BaseModel, Field
 
 from logs import get_logger
+
+from .settings import settings
 
 if TYPE_CHECKING:
     from mistune.markdown import Markdown
@@ -35,7 +39,7 @@ class InlineTypstBlock(BaseModel):
 
     def get_context_for_llm(self) -> str:
         """Get context information for LLM (without AST path)."""
-        context_parts = []
+        context_parts: list[str] = []
         if self.context_before:
             context_parts.append("Context before:")
             context_parts.extend(f"  {line}" for line in self.context_before)
@@ -71,7 +75,7 @@ class BlockTypstBlock(BaseModel):
 
     def get_context_for_llm(self) -> str:
         """Get context information for LLM (without AST path)."""
-        context_parts = []
+        context_parts: list[str] = []
         if self.context_before:
             context_parts.append("Context before:")
             context_parts.extend(f"  {line}" for line in self.context_before)
@@ -107,7 +111,7 @@ class CodeblockTypstBlock(BaseModel):
 
     def get_context_for_llm(self) -> str:
         """Get context information for LLM (without AST path)."""
-        context_parts = []
+        context_parts: list[str] = []
         if self.context_before:
             context_parts.append("Context before:")
             context_parts.extend(f"  {line}" for line in self.context_before)
@@ -172,7 +176,6 @@ def _walk_ast_for_typst(
     tokens: list[dict[str, Any]] | str, markdown_content: str, ast_path: list[int] | None = None, line_counter: int = 1
 ) -> list[TypstBlock]:
     """Walk AST tokens and extract Typst blocks with AST paths and context."""
-    from .settings import settings
 
     typst_blocks: list[TypstBlock] = []
     if not isinstance(tokens, list):
@@ -183,7 +186,7 @@ def _walk_ast_for_typst(
         ast_path = []
 
     for token_idx, token in enumerate(tokens):
-        current_path = ast_path + [token_idx]
+        current_path = [*ast_path, token_idx]
         token_type = str(token.get("type", ""))  # pyright: ignore[reportAny]
 
         block: TypstBlock
@@ -258,10 +261,10 @@ def _walk_ast_for_typst(
         # Recursively check children with updated path
         if "children" in token:
             child_blocks = _walk_ast_for_typst(
-                token["children"],
+                token["children"],  # pyright: ignore[reportAny]
                 markdown_content,
                 current_path,
-                line_counter,  # pyright: ignore[reportAny]
+                line_counter,
             )
             typst_blocks.extend(child_blocks)
 
@@ -304,7 +307,7 @@ def _navigate_ast_path(ast: list[dict[str, Any]], path: list[int]) -> dict[str, 
 
         # Continue navigating into children
         if "children" in current_node:
-            current = current_node["children"]  # pyright: ignore[reportAny]
+            current = current_node["children"]
         else:
             logger.warning("Invalid AST path %s: no children at index %d", path, index)
             return None
@@ -328,11 +331,11 @@ def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], 
             try:
                 match block.type:
                     case "inline":
-                        node["raw"] = f"${fixed_content}$"  # pyright: ignore[reportAny]
+                        node["raw"] = f"${fixed_content}$"
                     case "block":
-                        node["raw"] = f"$${fixed_content}$$"  # pyright: ignore[reportAny]
+                        node["raw"] = f"$${fixed_content}$$"
                     case "codeblock":
-                        node["raw"] = fixed_content  # pyright: ignore[reportAny]
+                        node["raw"] = fixed_content
 
                 logger.debug(
                     "Applied AST fix at path %s: %s -> %s", block.ast_path, block.content[:30], fixed_content[:30]
@@ -342,50 +345,40 @@ def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], 
 
 
 def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
-    """Render modified AST back to markdown."""
-    # Create a custom renderer that preserves the raw content
-    from mistune.renderers.markdown import MarkdownRenderer
+    """Render modified AST back to markdown using mistune's built-in renderer."""
 
-    class PreservingMarkdownRenderer(MarkdownRenderer):
-        """Custom renderer that preserves raw content for math blocks."""
+    # Create a markdown renderer with math plugin support
+    class MathMarkdownRenderer(MarkdownRenderer):
+        def inline_math(self, token: dict[str, Any], _: BlockState) -> str:
+            return token.get("raw", f"${token.get('raw', '')}$")  # pyright: ignore[reportAny]
 
-        def inline_math(self, text: str) -> str:  # pyright: ignore[reportAny]
-            return text  # Raw content already includes $...$
+        def block_math(self, token: dict[str, Any], _: BlockState) -> str:
+            return token.get("raw", f"$${token.get('raw', '')}$$")  # pyright: ignore[reportAny]
 
-        def block_math(self, text: str) -> str:  # pyright: ignore[reportAny]
-            return text  # Raw content already includes $$...$$
+        @override
+        def block_code(self, token: dict[str, Any], state: BlockState) -> str:
+            # Handle Typst code blocks - ensure they use 'typ' not 'typst'
+            attrs = token.get("attrs", {})  # pyright: ignore[reportAny]
+            info = str(attrs.get("info", ""))  # pyright: ignore[reportAny]
+            code = str(token["raw"])  # pyright: ignore[reportAny]
 
-        def code_block(self, code: str, info: str | None = None) -> str:  # pyright: ignore[reportAny]
-            if info and info.strip().lower() in ("typ", "typst"):
-                return f"```typst\n{code}\n```"
-            return f"```{info or ''}\n{code}\n```"
+            # If it's a typst block, make sure it uses 'typ'
+            if info and info.strip().lower() in ("typst", "typ"):
+                if code and code[-1] != "\n":
+                    code += "\n"
+                return f"```typ\n{code}```\n\n"
 
-    try:
-        renderer = PreservingMarkdownRenderer()
-        # Render using mistune's internal mechanisms
-        # Note: This is a simplified approach and may not handle all edge cases
-        result_parts = []
+            # For other code blocks, use the parent implementation
+            return super().block_code(token, state)  # pyright: ignore[reportUnknownMemberType]
 
-        for token in ast:
-            token_type = token.get("type", "")  # pyright: ignore[reportAny]
+    # Create the markdown renderer
+    renderer = MathMarkdownRenderer()
 
-            if token_type == "inline_math":
-                result_parts.append(token.get("raw", ""))  # pyright: ignore[reportAny]
-            elif token_type == "block_math":
-                result_parts.append(token.get("raw", ""))  # pyright: ignore[reportAny]
-            elif token_type == "code_block":
-                result_parts.append(token.get("raw", ""))  # pyright: ignore[reportAny]
-            else:
-                # For other token types, we'd need more complex rendering logic
-                # This is a limitation of the current approach
-                result_parts.append(str(token.get("raw", "")))  # pyright: ignore[reportAny]
+    # Create a block state (required for the renderer)
+    state = BlockState()
 
-        return "\n".join(result_parts)
-
-    except Exception as e:
-        logger.warning("Failed to render AST to markdown: %s", e)
-        # Fallback to string replacement
-        return ""
+    # Render the AST back to markdown
+    return renderer(ast, state)
 
 
 def reconstruct_markdown_with_fixes(
@@ -395,53 +388,52 @@ def reconstruct_markdown_with_fixes(
     if not fixed_contents:
         return original_content
 
-    try:
-        # Parse original content to AST
-        parser: Markdown = mistune.create_markdown(renderer="ast", plugins=["math"])  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        ast = parser(original_content)  # pyright: ignore[reportUnknownVariableType]
+    # Use AST-based reconstruction (proper approach)
 
-        if not isinstance(ast, list):
-            logger.warning("Expected list AST, got %s. Falling back to string replacement", type(ast))
-            raise ValueError("Invalid AST structure")
+    # Parse original content to AST
+    parser: Markdown = mistune.create_markdown(renderer="ast", plugins=["math"])  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    ast = parser(original_content)  # pyright: ignore[reportUnknownVariableType]
 
-        # Apply fixes to AST
-        _apply_ast_fixes(ast, typst_blocks, fixed_contents)
+    if not isinstance(ast, list):
+        logger.warning("Expected list AST, got %s. Falling back to string replacement", type(ast))  # pyright: ignore[reportUnknownArgumentType]
+        msg = "Invalid AST structure"
+        raise TypeError(msg)
 
-        # Render modified AST back to markdown
-        result = _render_ast_to_markdown(ast)
+    # Apply fixes to AST
+    _apply_ast_fixes(ast, typst_blocks, fixed_contents)  # pyright: ignore[reportUnknownArgumentType]
 
-        if result:
-            logger.info("Successfully applied %d AST-based fixes", len(fixed_contents))
-            return result
-        else:
-            raise ValueError("AST rendering failed")
+    # Render modified AST back to markdown
+    result = _render_ast_to_markdown(ast)
 
-    except Exception as e:
-        logger.warning("AST-based reconstruction failed (%s), falling back to string replacement", e)
-
-        # Fallback to the previous string-based approach
-        result = original_content
-
-        # Sort blocks by line number in reverse order to avoid offset issues
-        sorted_blocks = sorted(typst_blocks, key=lambda b: b.line_start, reverse=True)
-
-        for block in sorted_blocks:
-            if block.content in fixed_contents:
-                fixed_content = fixed_contents[block.content]
-
-                # Get original markdown form and create fixed markdown form
-                original_markdown = block.get_markdown_form()
-
-                match block.type:
-                    case "inline":
-                        fixed_markdown = f"${fixed_content}$"
-                    case "block":
-                        fixed_markdown = f"$${fixed_content}$$"
-                    case "codeblock":
-                        fixed_markdown = f"```typst\n{fixed_content}\n```"
-
-                # Replace the original markdown form with the fixed form
-                result = result.replace(original_markdown, fixed_markdown, 1)
-
-        logger.info("Applied %d fixes using string replacement fallback", len(fixed_contents))
+    if result:
+        logger.info("Successfully applied %d AST-based fixes", len(fixed_contents))
         return result
+    msg = "AST rendering failed"
+    raise ValueError(msg)
+
+    # Use string-based approach (reliable fallback)
+    result = original_content
+
+    # Sort blocks by line number in reverse order to avoid offset issues
+    sorted_blocks = sorted(typst_blocks, key=lambda b: b.line_start, reverse=True)
+
+    for block in sorted_blocks:
+        if block.content in fixed_contents:
+            fixed_content = fixed_contents[block.content]
+
+            # Get original markdown form and create fixed markdown form
+            original_markdown = block.get_markdown_form()
+
+            match block.type:
+                case "inline":
+                    fixed_markdown = f"${fixed_content}$"
+                case "block":
+                    fixed_markdown = f"$${fixed_content}$$"
+                case "codeblock":
+                    fixed_markdown = f"```typst\n{fixed_content}\n```"
+
+            # Replace the original markdown form with the fixed form
+            result = result.replace(original_markdown, fixed_markdown, 1)
+
+    logger.info("Applied %d fixes using string replacement fallback", len(fixed_contents))
+    return result
