@@ -26,4 +26,5 @@ qwen
 shfmt
 tikz
 tikzpicture
+Typst
 usepackage
