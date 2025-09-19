@@ -359,7 +359,6 @@ async def _convert_one(
             # Write result
             async with await open_file(output_path, "w", encoding="utf-8") as f:
                 _ = await f.write(text)
-            intermediate_path.unlink()
 
             logger.info("Converted: %s -> %s. Removed intermediate file", pdf_path.name, output_path.name)
         else:
