@@ -164,9 +164,10 @@ def _walk_ast_for_typst(
 
         block: TypstBlock
         match token_type:
-            case "code_block":
+            case "block_code":
                 # Check for Typst code blocks
-                info = str(token.get("info", "")).strip().lower()  # pyright: ignore[reportAny]
+                attrs = token.get("attrs", {})  # pyright: ignore[reportAny]
+                info = str(attrs.get("info", "")).strip().lower()  # pyright: ignore[reportAny]
                 if info in ("typ", "typst"):
                     code = str(token.get("raw", ""))  # pyright: ignore[reportAny]
 
@@ -300,7 +301,19 @@ def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], 
                 logger.warning("Could not find AST node at path %s for block: %s", block.ast_path, block.content[:50])
                 continue
 
-            node["raw"] = block.model_copy(update={"content": fixed_content}).get_markdown_form()
+            node_type = str(node.get("type", ""))
+            # Mistune expects raw to be pure content (no $,$$, or fences)
+            if node_type in ("inline_math", "block_math", "block_code"):
+                node["raw"] = fixed_content
+                if node_type == "block_code":
+                    attrs = node.get("attrs")
+                    if not isinstance(attrs, dict):
+                        attrs = {}
+                        node["attrs"] = attrs
+                    # Normalize typst → typ
+                    attrs["info"] = "typ"
+            else:
+                node["raw"] = fixed_content
 
 
 def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
@@ -308,26 +321,18 @@ def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
 
     # Create a markdown renderer with math plugin support
     class MathMarkdownRenderer(MarkdownRenderer):
-        def inline_math(self, token: dict[str, Any], _: BlockState) -> str:
-            return token.get("raw", f"${token.get('raw', '')}$")  # pyright: ignore[reportAny]
+        def inline_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
+            raw = str(token.get("raw", ""))
+            return f"${raw}$"
 
-        def block_math(self, token: dict[str, Any], _: BlockState) -> str:
-            return token.get("raw", f"$${token.get('raw', '')}$$")  # pyright: ignore[reportAny]
+        def block_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
+            raw = str(token.get("raw", ""))
+            return f"$${raw}$$"
 
         @override
         def block_code(self, token: dict[str, Any], state: BlockState) -> str:
-            # Handle Typst code blocks - ensure they use 'typ' not 'typst'
-            attrs = token.get("attrs", {})  # pyright: ignore[reportAny]
-            info = str(attrs.get("info", ""))  # pyright: ignore[reportAny]
-            code = str(token["raw"])  # pyright: ignore[reportAny]
-
-            # If it's a typst block, make sure it uses 'typ'
-            if info and info.strip().lower() in ("typst", "typ"):
-                if code and code[-1] != "\n":
-                    code += "\n"
-                return f"```typ\n{code}```\n\n"
-
-            # For other code blocks, use the parent implementation
+            # Do not force fences; rely on base to compute safe markers.
+            # We already normalized attrs.info to 'typ' in AST fix step.
             return super().block_code(token, state)  # pyright: ignore[reportUnknownMemberType]
 
     # Create the markdown renderer
