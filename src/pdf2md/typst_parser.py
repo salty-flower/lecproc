@@ -266,18 +266,18 @@ def _navigate_ast_path(ast: list[dict[str, Any]], path: list[int]) -> dict[str, 
     current = ast
 
     for index in path:
-        if not isinstance(current, list) or index >= len(current):
+        if not isinstance(current, list) or index >= len(current):  # pyright: ignore[reportUnknownArgumentType]
             logger.warning("Invalid AST path %s: index %d out of bounds", path, index)
             return None
 
-        current_node = current[index]
+        current_node = current[index]  # pyright: ignore[reportUnknownVariableType]
         if not isinstance(current_node, dict):
             logger.warning("Invalid AST path %s: expected dict at index %d", path, index)
             return None
 
         # For the last element in path, return the node
         if index == path[-1]:
-            return current_node
+            return current_node  # pyright: ignore[reportUnknownVariableType]
 
         # Continue navigating into children
         if "children" in current_node:
@@ -301,7 +301,7 @@ def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], 
                 logger.warning("Could not find AST node at path %s for block: %s", block.ast_path, block.content[:50])
                 continue
 
-            node_type = str(node.get("type", ""))
+            node_type = str(node.get("type", ""))  # pyright: ignore[reportAny]
             # Mistune expects raw to be pure content (no $,$$, or fences)
             if node_type in ("inline_math", "block_math", "block_code"):
                 node["raw"] = fixed_content
@@ -322,11 +322,11 @@ def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
     # Create a markdown renderer with math plugin support
     class MathMarkdownRenderer(MarkdownRenderer):
         def inline_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
-            raw = str(token.get("raw", ""))
+            raw = str(token.get("raw", ""))  # pyright: ignore[reportAny]
             return f"${raw}$"
 
         def block_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
-            raw = str(token.get("raw", ""))
+            raw = str(token.get("raw", ""))  # pyright: ignore[reportAny]
             return f"$${raw}$$"
 
         @override
@@ -367,7 +367,7 @@ def reconstruct_markdown_with_fixes(
     _apply_ast_fixes(ast, typst_blocks, fixed_contents)  # pyright: ignore[reportUnknownArgumentType]
 
     # Render modified AST back to markdown
-    result = _render_ast_to_markdown(ast)
+    result = _render_ast_to_markdown(ast)  # pyright: ignore[reportUnknownArgumentType]
 
     if result:
         logger.info("Successfully applied %d AST-based fixes", len(fixed_contents))
