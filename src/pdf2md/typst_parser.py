@@ -1,6 +1,7 @@
 """Typst parsing and validation utilities for markdown documents."""
 
-from typing import TYPE_CHECKING, Any, Literal, override
+import abc
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import mistune
 from mistune.core import BlockState
@@ -17,112 +18,84 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class InlineTypstBlock(BaseModel):
-    """Inline Typst math: $content$ in markdown, content only for validation."""
+class BaseTypstBlock(BaseModel, abc.ABC):  # pyright: ignore[reportUnsafeMultipleInheritance]: pydantic [documentation allows](https://docs.pydantic.dev/latest/concepts/models/#abstract-base-classes)
+    """Base class for Typst blocks."""
 
-    type: Literal["inline"] = "inline"
-    content: str = Field(description="Pure math content without $ delimiters")
+    type: ClassVar[str]
+
+    content: str
     location: str = Field(description="Where this block was found")
-    line_start: int = -1
-    line_end: int = -1
+    line_start: int
+    line_end: int
     ast_path: list[int] = Field(default_factory=list, description="Path to AST node for precise replacement")
     context_before: list[str] = Field(default_factory=list, description="Context lines before this block")
     context_after: list[str] = Field(default_factory=list, description="Context lines after this block")
 
+    @abc.abstractmethod
+    def get_markdown_form(self) -> str: ...
+
+    @abc.abstractmethod
+    def get_validation_form(self) -> str: ...
+
+    def get_context_for_llm(self) -> str:
+        """Get context information for LLM (without AST path)."""
+        context_parts: list[str] = []
+        if self.context_before:
+            context_parts.append("Context before:")
+            context_parts.extend(f"  {line}" for line in self.context_before)
+
+        context_parts.append(f"Typst {self.type} content: {self.content}")
+
+        if self.context_after:
+            context_parts.append("Context after:")
+            context_parts.extend(f"  {line}" for line in self.context_after)
+
+        return "\n".join(context_parts)
+
+
+class InlineTypstBlock(BaseTypstBlock):
+    type: ClassVar[str] = "inline"
+    content: str = Field(description="Pure math content without $ delimiters")
+
+    @override
     def get_markdown_form(self) -> str:
         """Get the markdown representation."""
         return f"${self.content}$"
 
+    @override
     def get_validation_form(self) -> str:
         """Get content for Typst compiler validation."""
-        return self.content  # Pure content, no delimiters
-
-    def get_context_for_llm(self) -> str:
-        """Get context information for LLM (without AST path)."""
-        context_parts: list[str] = []
-        if self.context_before:
-            context_parts.append("Context before:")
-            context_parts.extend(f"  {line}" for line in self.context_before)
-
-        context_parts.append(f"Typst {self.type} content: {self.content}")
-
-        if self.context_after:
-            context_parts.append("Context after:")
-            context_parts.extend(f"  {line}" for line in self.context_after)
-
-        return "\n".join(context_parts)
+        return f"${self.content}$"
 
 
-class BlockTypstBlock(BaseModel):
-    """Block Typst math: $$content$$ in markdown, single $ for validation."""
-
-    type: Literal["block"] = "block"
+class BlockTypstBlock(BaseTypstBlock):
+    type: ClassVar[str] = "block"
     content: str = Field(description="Pure math content without $$ delimiters")
-    location: str = Field(description="Where this block was found")
-    line_start: int = -1
-    line_end: int = -1
-    ast_path: list[int] = Field(default_factory=list, description="Path to AST node for precise replacement")
-    context_before: list[str] = Field(default_factory=list, description="Context lines before this block")
-    context_after: list[str] = Field(default_factory=list, description="Context lines after this block")
 
+    @override
     def get_markdown_form(self) -> str:
         """Get the markdown representation."""
         return f"$${self.content}$$"
 
+    @override
     def get_validation_form(self) -> str:
         """Get content for Typst compiler validation."""
-        return f"${self.content}$"  # Single dollars for block math validation
-
-    def get_context_for_llm(self) -> str:
-        """Get context information for LLM (without AST path)."""
-        context_parts: list[str] = []
-        if self.context_before:
-            context_parts.append("Context before:")
-            context_parts.extend(f"  {line}" for line in self.context_before)
-
-        context_parts.append(f"Typst {self.type} content: {self.content}")
-
-        if self.context_after:
-            context_parts.append("Context after:")
-            context_parts.extend(f"  {line}" for line in self.context_after)
-
-        return "\n".join(context_parts)
+        return f"$ {self.content} $"
 
 
-class CodeblockTypstBlock(BaseModel):
-    """Typst code block: ```typst content ``` - direct compilation."""
-
-    type: Literal["codeblock"] = "codeblock"
+class CodeblockTypstBlock(BaseTypstBlock):
+    type: ClassVar[str] = "codeblock"
     content: str = Field(description="Full Typst code for direct compilation")
-    location: str = Field(description="Where this block was found")
-    line_start: int = -1
-    line_end: int = -1
-    ast_path: list[int] = Field(default_factory=list, description="Path to AST node for precise replacement")
-    context_before: list[str] = Field(default_factory=list, description="Context lines before this block")
-    context_after: list[str] = Field(default_factory=list, description="Context lines after this block")
 
+    @override
     def get_markdown_form(self) -> str:
         """Get the markdown representation."""
-        return f"```typst\n{self.content}\n```"
+        return f"```typ\n{self.content}\n```"
 
+    @override
     def get_validation_form(self) -> str:
         """Get content for Typst compiler validation."""
-        return self.content  # Direct compilation
-
-    def get_context_for_llm(self) -> str:
-        """Get context information for LLM (without AST path)."""
-        context_parts: list[str] = []
-        if self.context_before:
-            context_parts.append("Context before:")
-            context_parts.extend(f"  {line}" for line in self.context_before)
-
-        context_parts.append(f"Typst {self.type} content: {self.content}")
-
-        if self.context_after:
-            context_parts.append("Context after:")
-            context_parts.extend(f"  {line}" for line in self.context_after)
-
-        return "\n".join(context_parts)
+        return self.content
 
 
 # Discriminated union of all Typst block types
@@ -137,11 +110,11 @@ def _extract_pure_content(raw_content: str, token_type: str) -> str:
         case "inline_math":
             # Remove single $ delimiters: "$x=y$" -> "x=y"
             if content.startswith("$") and content.endswith("$"):
-                return content[1:-1]
+                return content[1:-1].strip()
         case "block_math":
             # Remove double $$ delimiters: "$$x=y$$" -> "x=y"
             if content.startswith("$$") and content.endswith("$$"):
-                return content[2:-2]
+                return content[2:-2].strip()
         case _:
             # Not our business
             pass
@@ -327,21 +300,7 @@ def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], 
                 logger.warning("Could not find AST node at path %s for block: %s", block.ast_path, block.content[:50])
                 continue
 
-            # Update the raw content based on block type
-            try:
-                match block.type:
-                    case "inline":
-                        node["raw"] = f"${fixed_content}$"
-                    case "block":
-                        node["raw"] = f"$${fixed_content}$$"
-                    case "codeblock":
-                        node["raw"] = fixed_content
-
-                logger.debug(
-                    "Applied AST fix at path %s: %s -> %s", block.ast_path, block.content[:30], fixed_content[:30]
-                )
-            except (KeyError, TypeError) as e:
-                logger.warning("Failed to apply AST fix at path %s: %s", block.ast_path, e)
+            node["raw"] = block.model_copy(update={"content": fixed_content}).get_markdown_form()
 
 
 def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
@@ -410,30 +369,3 @@ def reconstruct_markdown_with_fixes(
         return result
     msg = "AST rendering failed"
     raise ValueError(msg)
-
-    # Use string-based approach (reliable fallback)
-    result = original_content
-
-    # Sort blocks by line number in reverse order to avoid offset issues
-    sorted_blocks = sorted(typst_blocks, key=lambda b: b.line_start, reverse=True)
-
-    for block in sorted_blocks:
-        if block.content in fixed_contents:
-            fixed_content = fixed_contents[block.content]
-
-            # Get original markdown form and create fixed markdown form
-            original_markdown = block.get_markdown_form()
-
-            match block.type:
-                case "inline":
-                    fixed_markdown = f"${fixed_content}$"
-                case "block":
-                    fixed_markdown = f"$${fixed_content}$$"
-                case "codeblock":
-                    fixed_markdown = f"```typst\n{fixed_content}\n```"
-
-            # Replace the original markdown form with the fixed form
-            result = result.replace(original_markdown, fixed_markdown, 1)
-
-    logger.info("Applied %d fixes using string replacement fallback", len(fixed_contents))
-    return result
