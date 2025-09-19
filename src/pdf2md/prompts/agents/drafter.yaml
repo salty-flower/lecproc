@@ -4,14 +4,18 @@
 
     {{ document_making.tikz_diagram }}
 
-    {{ examples["1"] }}
-
     {{ document_making.picture }}
-
-    {{ typst.high_levels }}
 
     {{ document_making.formula_env_selection }}
 
     {{ document_making.escaping }}
 
     {{ document_making.general_rules }}
+
+    ---
+
+    {{ typst.high_levels }}
+
+    <complete_example>
+    {{ examples["1"] }}
+    </complete_example>
