@@ -1,6 +1,7 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
+import re
 from pathlib import Path
 from typing import cast
 
@@ -56,23 +57,63 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
         logger.warning("LLM error in fix_single_typst_error: %s", e)
         return block.content
     else:
-        return response_text.strip() if response_text else block.content
+        cleaned = _sanitize_llm_fix(response_text or "", block.type)
+        return cleaned if cleaned else block.content
+
+
+def _strip_fences(text: str) -> str:
+    """Remove surrounding code fences (triple/single backticks) if the whole text is fenced."""
+    s = text.strip()
+    # Triple backticks with optional language line
+    m = re.match(r"^```[\t ]*([a-zA-Z0-9_-]+)?\s*\n([\s\S]*?)\n```\s*$", s)
+    if m:
+        return m.group(2).strip()
+    # Single-line inline code
+    m = re.match(r"^`([^`]+)`$", s)
+    if m:
+        return m.group(1).strip()
+    return s
+
+
+def _strip_math_wrappers(text: str) -> str:
+    """Remove math delimiters ($ or $$) and backticks."""
+    return text.strip("$` \n")
+
+
+def _sanitize_llm_fix(response_text: str, block_type: str) -> str:
+    """Normalize LLM output to pure Typst content (no markdown backticks or $-delimiters)."""
+    s = response_text.strip()
+    s = _strip_fences(s)
+    # Some models add extra fences inside too; try once more
+    s = _strip_fences(s)
+
+    # Remove math delimiters depending on block type
+    if block_type in ("inline", "block"):
+        s = _strip_math_wrappers(s)
+        # After removing $$, there might be remaining single $; strip again
+        s = _strip_math_wrappers(s)
+
+    # Ensure no trailing/leading stray backticks remain
+    return s.strip("`\n ")
 
 
 async def fix_typst_errors(
     markdown_content: str, validation_results: list[TypstValidationResult], logger_name: str, max_attempts: int = 3
-) -> tuple[str, bool]:
+) -> tuple[str, bool, dict[str, str]]:
     """
     Fix Typst errors in markdown content using LLM with parallel processing and progress saving.
 
     Returns:
-        (fixed_content, all_fixed): The fixed markdown content and whether all errors were resolved
+        (fixed_content, all_fixed, fixed_contents):
+            - fixed_content: the fixed markdown content string
+            - all_fixed: whether we produced fixes for all invalid contents we attempted
+            - fixed_contents: mapping from original content to fixed content applied
     """
     logger = get_logger(logger_name)
     invalid_results = get_invalid_blocks(validation_results)
 
     if not invalid_results:
-        return markdown_content, True
+        return markdown_content, True, {}
 
     logger.info("Attempting to fix %d Typst error(s) using LLM", len(invalid_results))
 
@@ -180,7 +221,10 @@ async def fix_typst_errors(
             progress.cleanup_file(progress_file)
 
     all_fixed = len(progress.fixes) >= len(unique_fixes)
-    return current_content, all_fixed
+    fixed_contents_final = (
+        {entry.original_content: entry.fixed_content for entry in progress.fixes.values()} if progress.fixes else {}
+    )
+    return current_content, all_fixed, fixed_contents_final
 
 
 async def fix_typst_errors_iteratively(
@@ -212,11 +256,23 @@ async def fix_typst_errors_iteratively(
             return current_content, True
 
         # Attempt to fix errors
-        current_content, all_fixed = await fix_typst_errors(
+        current_content, _all_fixed_by_count, fixed_map = await fix_typst_errors(
             current_content, validation_results, logger_name, max_fix_attempts
         )
 
-        if all_fixed:
+        # Re-validate only the blocks we already have, after applying content updates in-memory
+        if fixed_map:
+            updated_blocks = [
+                block.model_copy(update={"content": fixed_map.get(block.content, block.content)})
+                for block in typst_blocks
+            ]
+        else:
+            updated_blocks = typst_blocks
+
+        validation_results_after = await validate_all_typst_blocks(updated_blocks, logger_name)
+        invalid_after = get_invalid_blocks(validation_results_after)
+
+        if not invalid_after:
             logger.info("All Typst errors fixed successfully")
             return current_content, True
 
