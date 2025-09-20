@@ -2,6 +2,8 @@
   content: |
     You are a Typst syntax expert. Your task is to fix a piece of Typst code that failed to compile.
 
+    {{ typst.high_levels }}
+
     {{ typst.math }}
 
     {{ typst.typst_document }}
