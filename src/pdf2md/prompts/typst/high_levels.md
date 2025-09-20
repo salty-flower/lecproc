@@ -11,6 +11,7 @@ PAY FULL ATTENTION TO THE DETAILS. DO NOT HOLD BACK. GIVE IT YOU ALL.
 
 - No backslashes. Symbols, functions are to be directly called by their names. Example: $lim_(x->0) sin(x)/x, quad lim_(x->0) (x+1)/x$
 - Intuitive ASCII composition for symbols will work. Example: $<=>$ for "IFF sign", $<=$ for less than or equal to sign, $>= $ for greater than or equal to, $!= $ for not equal to
+- Common decorations: $hat(p) approx p$, $overline(X)$, $Pr("Some event" bar "Another event to condition on")$
 
 ### Styling
 
