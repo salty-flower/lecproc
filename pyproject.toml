@@ -21,6 +21,8 @@ dependencies = [
     "openai-agents[litellm]>=0.3.0",
     "mistune>=3.1.4",
     "regex>=2025.9.1",
+    "markdown-it-py[linkify,plugins]>=4.0.0",
+    "mdformat>=0.6.0",
 ]
 
 [dependency-groups]
@@ -43,6 +45,7 @@ torchvision = [
 pytorch-triton-xpu = [
   { index = "pytorch-xpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
+mdformat = { git = "https://github.com/hukkin/mdformat" }
 
 [[tool.uv.index]]
 name = "pytorch-xpu"

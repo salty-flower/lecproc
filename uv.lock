@@ -540,6 +540,8 @@ dependencies = [
     { name = "faster-whisper" },
     { name = "httpx" },
     { name = "litellm" },
+    { name = "markdown-it-py", extra = ["linkify", "plugins"] },
+    { name = "mdformat" },
     { name = "mistune" },
     { name = "natsort" },
     { name = "openai" },
@@ -568,6 +570,8 @@ requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "litellm", specifier = ">=1.77.0" },
+    { name = "markdown-it-py", extras = ["linkify", "plugins"], specifier = ">=4.0.0" },
+    { name = "mdformat", git = "https://github.com/hukkin/mdformat" },
     { name = "mistune", specifier = ">=3.1.4" },
     { name = "natsort", specifier = ">=8.4.0" },
     { name = "openai", specifier = ">=1.107.1" },
@@ -588,6 +592,18 @@ lint = [
     { name = "mypy", specifier = ">=1.17.1" },
     { name = "ruff", specifier = ">=0.13.0" },
     { name = "types-regex", specifier = ">=2025.9.1.20250903" },
+]
+
+[[package]]
+name = "linkify-it-py"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "uc-micro-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/ae/bb56c6828e4797ba5a4821eec7c43b8bf40f69cda4d4f5f8c8a2810ec96a/linkify-it-py-2.0.3.tar.gz", hash = "sha256:68cda27e162e9215c17d786649d1da0021a451bdc436ef9e0fa0ba5234b9b048", size = 27946, upload-time = "2024-02-04T14:48:04.179Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/1e/b832de447dee8b582cac175871d2f6c3d5077cc56d5575cadba1fd1cccfa/linkify_it_py-2.0.3-py3-none-any.whl", hash = "sha256:6bcbc417b0ac14323382aef5c5192c0075bf8a9d6b41820a2b66371eac6b6d79", size = 19820, upload-time = "2024-02-04T14:48:02.496Z" },
 ]
 
 [[package]]
@@ -623,6 +639,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/f5/4ec618ed16cc4f8fb3b701563655a69816155e79e24a17b651541804721d/markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3", size = 73070, upload-time = "2025-08-11T12:57:52.854Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/94/54/e7d793b573f298e1c9013b8c4dade17d481164aa517d1d7148619c2cedbf/markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147", size = 87321, upload-time = "2025-08-11T12:57:51.923Z" },
+]
+
+[package.optional-dependencies]
+linkify = [
+    { name = "linkify-it-py" },
+]
+plugins = [
+    { name = "mdit-py-plugins" },
 ]
 
 [[package]]
@@ -673,6 +697,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/95/fd/d6e941a52446198b73e5e4a953441f667f1469aeb06fb382d9f6729d6168/mcp-1.14.0.tar.gz", hash = "sha256:2e7d98b195e08b2abc1dc6191f6f3dc0059604ac13ee6a40f88676274787fac4", size = 454855, upload-time = "2025-09-11T17:40:48.667Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/7b/84b0dd4c2c5a499d2c5d63fb7a1224c25fc4c8b6c24623fa7a566471480d/mcp-1.14.0-py3-none-any.whl", hash = "sha256:b2d27feba27b4c53d41b58aa7f4d090ae0cb740cbc4e339af10f8cbe54c4e19d", size = 163805, upload-time = "2025-09-11T17:40:46.891Z" },
+]
+
+[[package]]
+name = "mdformat"
+version = "0.7.22"
+source = { git = "https://github.com/hukkin/mdformat#2fba3881b2aa3696fb96da4cf4c078c3ab910c29" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+
+[[package]]
+name = "mdit-py-plugins"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b2/fd/a756d36c0bfba5f6e39a1cdbdbfdd448dc02692467d83816dff4592a1ebc/mdit_py_plugins-0.5.0.tar.gz", hash = "sha256:f4918cb50119f50446560513a8e311d574ff6aaed72606ddae6d35716fe809c6", size = 44655, upload-time = "2025-08-11T07:25:49.083Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/86/dd6e5db36df29e76c7a7699123569a4a18c1623ce68d826ed96c62643cae/mdit_py_plugins-0.5.0-py3-none-any.whl", hash = "sha256:07a08422fc1936a5d26d146759e9155ea466e842f5ab2f7d2266dd084c8dab1f", size = 57205, upload-time = "2025-08-11T07:25:47.597Z" },
 ]
 
 [[package]]
@@ -1700,6 +1744,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/14/bfb553dc82d8dc452f0952b61ed1e9c2825fce4ac244d4dc759dcd16eaf2/typst-0.13.7-cp38-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:36b41752e3394e9b9afd4cc7ca044af0813c06e94cc00416ba712be35a542a26", size = 21913975, upload-time = "2025-08-29T14:12:53.727Z" },
     { url = "https://files.pythonhosted.org/packages/df/e3/afa1a74cf51ad17bd8669c6a365740a5218c9589e2d84be66bc01387be44/typst-0.13.7-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:af5001bbdf381aff569e0ecce491f487766653e8d2dfd4942aa652330986ea2b", size = 21742896, upload-time = "2025-08-29T14:12:56.099Z" },
     { url = "https://files.pythonhosted.org/packages/c1/58/54a7934d8ed54b3d2fd334ed605b812d2e891e4a1b851fd30bbe8c4486b4/typst-0.13.7-cp38-abi3-win_amd64.whl", hash = "sha256:5a63e5a9afcaddcabc6f82e47cdddb3cc9699376ea763dc69b28687c05d9e42a", size = 17277410, upload-time = "2025-08-29T14:12:58.427Z" },
+]
+
+[[package]]
+name = "uc-micro-py"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/7a/146a99696aee0609e3712f2b44c6274566bc368dfe8375191278045186b8/uc-micro-py-1.0.3.tar.gz", hash = "sha256:d321b92cff673ec58027c04015fcaa8bb1e005478643ff4a500882eaab88c48a", size = 6043, upload-time = "2024-02-09T16:52:01.654Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/87/1f677586e8ac487e29672e4b17455758fce261de06a0d086167bb760361a/uc_micro_py-1.0.3-py3-none-any.whl", hash = "sha256:db1dffff340817673d7b466ec86114a9dc0e9d4d9b5ba229d9d60e5c12600cd5", size = 6229, upload-time = "2024-02-09T16:52:00.371Z" },
 ]
 
 [[package]]
