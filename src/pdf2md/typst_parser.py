@@ -1,19 +1,21 @@
-"""Typst parsing and validation utilities for markdown documents."""
+"""Typst parsing and validation utilities for markdown documents.
+
+This module was migrated from Mistune to markdown-it-py + mdformat.
+"""
 
 import abc
-from typing import TYPE_CHECKING, Any, ClassVar, override
+from collections.abc import Callable, Iterable
+from typing import ClassVar, override
 
-import mistune
-from mistune.core import BlockState
-from mistune.renderers.markdown import MarkdownRenderer
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+from mdformat.renderer import MDRenderer, RenderContext, RenderTreeNode
+from mdit_py_plugins.dollarmath.index import dollarmath_plugin
 from pydantic import BaseModel, Field
 
 from logs import get_logger
 
 from .settings import settings
-
-if TYPE_CHECKING:
-    from mistune.markdown import Markdown
 
 logger = get_logger(__name__)
 
@@ -102,25 +104,17 @@ class CodeblockTypstBlock(BaseTypstBlock):
 TypstBlock = InlineTypstBlock | BlockTypstBlock | CodeblockTypstBlock
 
 
-def _extract_pure_content(raw_content: str, token_type: str) -> str:
-    """Extract pure content from raw mistune token, removing delimiters."""
-    content = raw_content.strip()
+def _normalize_info_string(info: str | None) -> str:
+    """Normalize a code fence info string for Typst code blocks.
 
-    match token_type:
-        case "inline_math":
-            # Remove single $ delimiters: "$x=y$" -> "x=y"
-            if content.startswith("$") and content.endswith("$"):
-                return content[1:-1].strip()
-        case "block_math":
-            # Remove double $$ delimiters: "$$x=y$$" -> "x=y"
-            if content.startswith("$$") and content.endswith("$$"):
-                return content[2:-2].strip()
-        case _:
-            # Not our business
-            pass
-
-    # For codeblocks or if delimiters not found, return as-is
-    return content
+    Returns "typ" for variations of Typst language labels.
+    """
+    if not info:
+        return ""
+    lowered = info.strip().lower()
+    if lowered in ("typst", "typ"):
+        return "typ"
+    return lowered
 
 
 def _extract_context_lines(
@@ -145,232 +139,214 @@ def _extract_context_lines(
     return context_before, context_after
 
 
-def _walk_ast_for_typst(
-    tokens: list[dict[str, Any]] | str, markdown_content: str, ast_path: list[int] | None = None, line_counter: int = 1
-) -> list[TypstBlock]:
-    """Walk AST tokens and extract Typst blocks with AST paths and context."""
+class TypstMdformatExtension:
+    """Minimal mdformat parser extension for Typst math/code rendering."""
+
+    CHANGES_AST: ClassVar[bool] = False
+
+    @staticmethod
+    def update_mdit(mdit: MarkdownIt) -> None:
+        # Enable $...$ and $$...$$ support
+        _: MarkdownIt = mdit.use(dollarmath_plugin)
+
+    # Renderer functions for dollarmath tokens
+    @staticmethod
+    def _render_math_inline(node: "RenderTreeNode", _: RenderContext) -> str:
+        return f"${node.content}$"
+
+    @staticmethod
+    def _render_math_block(node: "RenderTreeNode", _: RenderContext) -> str:
+        content = node.content.strip("\n$`")  # remove backticks and $ delimiters
+        return f"$${content}$$"
+
+    RENDERERS: ClassVar[dict[str, Callable[[RenderTreeNode, RenderContext], str]]] = {
+        "math_inline": _render_math_inline,
+        "inline_math": _render_math_inline,  # alias seen in some plugin versions
+        "math_block": _render_math_block,
+        "block_math": _render_math_block,  # alias seen in some plugin versions
+    }
+
+
+class ProtocolMDRenderer(MDRenderer):
+    """
+    Override the __output__ class variable to ClassVar[str]
+    to satisfy RendererProtocol constraints in markdown-it-py
+    """
+
+    __output__: ClassVar[str] = "md"  # type: ignore[misc]
+
+
+def _build_mdformat_mdit() -> MarkdownIt:
+    """Build a MarkdownIt instance configured like mdformat with our extension."""
+    mdit = MarkdownIt(renderer_cls=ProtocolMDRenderer)
+    # mdformat options container + behavior flags used by renderer
+    mdit.options["mdformat"] = {}
+    mdit.options["store_labels"] = True
+    # Register our extension directly (no entry points needed)
+    mdit.options["parser_extension"] = [TypstMdformatExtension]
+    TypstMdformatExtension.update_mdit(mdit)
+    return mdit
+
+
+def _walk_tokens_for_typst(tokens: Iterable[Token], markdown_content: str) -> list[TypstBlock]:
+    """Walk markdown-it tokens and extract Typst-related blocks.
+
+    - Code fences with info strings "typ"/"typst" are treated as Typst code.
+    - Inline and block dollar-math (via ``dollarmath``) are treated as Typst math.
+    """
 
     typst_blocks: list[TypstBlock] = []
-    if not isinstance(tokens, list):
-        logger.warning("Expected list of typst tokens, got type %s:\n%s", type(tokens), str(tokens))
-        return typst_blocks
 
-    if ast_path is None:
-        ast_path = []
+    for token_index, token in enumerate(tokens):
+        ttype = token.type
 
-    for token_idx, token in enumerate(tokens):
-        current_path = [*ast_path, token_idx]
-        token_type = str(token.get("type", ""))  # pyright: ignore[reportAny]
+        # Code fence: token.type == "fence"
+        if ttype == "fence":
+            info = _normalize_info_string(token.info)
+            if info == "typ":
+                code = token.content
+                token_map = token.map
+                # map is [start, end], 0-based lines of the block (inclusive start, exclusive end)
+                # Convert to 1-based line numbers; try to be conservative for context
+                line_start = (token_map[0] + 1) if token_map else 1
+                line_end = (token_map[1]) if token_map else max(line_start, line_start + code.count("\n"))
 
-        block: TypstBlock
-        match token_type:
-            case "block_code":
-                # Check for Typst code blocks
-                attrs = token.get("attrs", {})  # pyright: ignore[reportAny]
-                info = str(attrs.get("info", "")).strip().lower()  # pyright: ignore[reportAny]
-                if info in ("typ", "typst"):
-                    code = str(token.get("raw", ""))  # pyright: ignore[reportAny]
+                context_before, context_after = _extract_context_lines(
+                    markdown_content, line_start, line_end, settings.context_lines
+                )
 
-                    # Extract context lines
-                    context_before, context_after = _extract_context_lines(
-                        markdown_content, line_counter, line_counter + code.count("\n"), settings.context_lines
-                    )
-
-                    block = CodeblockTypstBlock(
+                typst_blocks.append(
+                    CodeblockTypstBlock(
                         content=code,
-                        location=f"code block (line ~{line_counter})",
-                        line_start=line_counter,
-                        line_end=line_counter + code.count("\n"),
-                        ast_path=current_path,
+                        location=f"code block (line ~{line_start})",
+                        line_start=line_start,
+                        line_end=line_end,
+                        ast_path=[token_index],
                         context_before=context_before,
                         context_after=context_after,
                     )
-                    typst_blocks.append(block)
-
-            case "block_math":
-                # Extract block math with pure content (no $$ delimiters)
-                raw_text = str(token.get("raw", ""))  # pyright: ignore[reportAny]
-                pure_content = _extract_pure_content(raw_text, "block_math")
-
-                # Extract context lines
-                context_before, context_after = _extract_context_lines(
-                    markdown_content, line_counter, line_counter + raw_text.count("\n"), settings.context_lines
                 )
+            continue
 
-                block = BlockTypstBlock(
-                    content=pure_content,
-                    location=f"block formula (line ~{line_counter})",
-                    line_start=line_counter,
-                    line_end=line_counter + raw_text.count("\n"),
-                    ast_path=current_path,
-                    context_before=context_before,
-                    context_after=context_after,
-                )
-                typst_blocks.append(block)
+        # Dollar math block via plugin: commonly "math_block" (also handle legacy "block_math")
+        if ttype in ("math_block", "block_math"):
+            content = token.content
+            token_map = token.map
+            line_start = (token_map[0] + 1) if token_map else 1
+            line_end = (token_map[1]) if token_map else max(line_start, line_start + content.count("\n"))
 
-            case "inline_math":
-                # Extract inline math with pure content (no $ delimiters)
-                raw_text = str(token.get("raw", ""))  # pyright: ignore[reportAny]
-                pure_content = _extract_pure_content(raw_text, "inline_math")
-
-                # Extract context lines
-                context_before, context_after = _extract_context_lines(
-                    markdown_content, line_counter, line_counter, settings.context_lines
-                )
-
-                block = InlineTypstBlock(
-                    content=pure_content,
-                    location=f"inline formula (line ~{line_counter})",
-                    line_start=line_counter,
-                    line_end=line_counter,
-                    ast_path=current_path,
-                    context_before=context_before,
-                    context_after=context_after,
-                )
-                typst_blocks.append(block)
-
-            case _:
-                pass
-
-        # Recursively check children with updated path
-        if "children" in token:
-            child_blocks = _walk_ast_for_typst(
-                token["children"],  # pyright: ignore[reportAny]
-                markdown_content,
-                current_path,
-                line_counter,
+            context_before, context_after = _extract_context_lines(
+                markdown_content, line_start, line_end, settings.context_lines
             )
-            typst_blocks.extend(child_blocks)
 
-        # Update line counter (rough approximation)
-        if "raw" in token:
-            line_counter += token["raw"].count("\n")  # pyright: ignore[reportAny]
-        line_counter += 1
+            typst_blocks.append(
+                BlockTypstBlock(
+                    content=content.strip(),
+                    location=f"block formula (line ~{line_start})",
+                    line_start=line_start,
+                    line_end=line_end,
+                    ast_path=[token_index],
+                    context_before=context_before,
+                    context_after=context_after,
+                )
+            )
+            continue
+
+        # Inline tokens contain children; search for inline math
+        if ttype == "inline":
+            token_map = token.map
+            line_start = (token_map[0] + 1) if token_map else 1
+            # For inline, we'll use the starting line for location/context
+            children: list[Token] = token.children or []
+            math_seen = 0
+            for child in children:
+                ctype = child.type
+                if ctype in ("math_inline", "inline_math"):
+                    content = child.content
+
+                    context_before, context_after = _extract_context_lines(
+                        markdown_content, line_start, line_start, settings.context_lines
+                    )
+
+                    typst_blocks.append(
+                        InlineTypstBlock(
+                            content=content.strip(),
+                            location=f"inline formula (line ~{line_start})",
+                            line_start=line_start,
+                            line_end=line_start,
+                            # ast_path[1] stores the inline-math occurrence index on this line
+                            ast_path=[token_index, math_seen],
+                            context_before=context_before,
+                            context_after=context_after,
+                        )
+                    )
+                    math_seen += 1
 
     return typst_blocks
 
 
 def extract_typst_blocks(markdown_content: str) -> list[TypstBlock]:
-    """Extract all Typst code blocks and formulas from markdown content with AST paths and context."""
-    parser: Markdown = mistune.create_markdown(renderer="ast", plugins=["math"])  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    """Extract all Typst code blocks and formulas using markdown-it-py with ``dollarmath``.
 
-    # Parse to AST
-    ast_tokens = parser(markdown_content)  # pyright: ignore[reportUnknownVariableType]
-
-    # Walk AST and extract Typst blocks with context
-    return _walk_ast_for_typst(ast_tokens, markdown_content)  # pyright: ignore[reportUnknownArgumentType]
-
-
-def _navigate_ast_path(ast: list[dict[str, Any]], path: list[int]) -> dict[str, Any] | None:
-    """Navigate to a specific AST node using the path."""
-    current = ast
-
-    for index in path:
-        if not isinstance(current, list) or index >= len(current):  # pyright: ignore[reportUnknownArgumentType]
-            logger.warning("Invalid AST path %s: index %d out of bounds", path, index)
-            return None
-
-        current_node = current[index]  # pyright: ignore[reportUnknownVariableType]
-        if not isinstance(current_node, dict):
-            logger.warning("Invalid AST path %s: expected dict at index %d", path, index)
-            return None
-
-        # For the last element in path, return the node
-        if index == path[-1]:
-            return current_node  # pyright: ignore[reportUnknownVariableType]
-
-        # Continue navigating into children
-        if "children" in current_node:
-            current = current_node["children"]
-        else:
-            logger.warning("Invalid AST path %s: no children at index %d", path, index)
-            return None
-
-    return None
+    Returns blocks with best-effort line numbers, context, and a simple token path.
+    """
+    md = _build_mdformat_mdit()
+    tokens = md.parse(markdown_content)
+    return _walk_tokens_for_typst(tokens, markdown_content)
 
 
-def _apply_ast_fixes(ast: list[dict[str, Any]], typst_blocks: list[TypstBlock], fixed_contents: dict[str, str]) -> None:
-    """Apply fixes directly to AST nodes using their paths."""
+def _apply_token_fixes(tokens: list[Token], typst_blocks: list[TypstBlock], fixed_contents: dict[str, str]) -> None:
+    """Apply fixes directly into markdown-it token stream based on stored paths."""
     for block in typst_blocks:
-        if block.content in fixed_contents:
-            fixed_content = fixed_contents[block.content]
+        if block.content not in fixed_contents:
+            continue
+        new_content = fixed_contents[block.content]
 
-            # Navigate to the specific AST node
-            node = _navigate_ast_path(ast, block.ast_path)
-            if node is None:
-                logger.warning("Could not find AST node at path %s for block: %s", block.ast_path, block.content[:50])
-                continue
+        # Navigate to token via stored top-level index
+        if not block.ast_path:
+            continue
+        top_index = block.ast_path[0]
+        if top_index < 0 or top_index >= len(tokens):
+            continue
+        tok = tokens[top_index]
 
-            node_type = str(node.get("type", ""))  # pyright: ignore[reportAny]
-            # Mistune expects raw to be pure content (no $,$$, or fences)
-            if node_type in ("inline_math", "block_math", "block_code"):
-                node["raw"] = fixed_content
-                if node_type == "block_code":
-                    attrs = node.get("attrs")
-                    if not isinstance(attrs, dict):
-                        attrs = {}
-                        node["attrs"] = attrs
-                    # Normalize typst → typ
-                    attrs["info"] = "typ"
-            else:
-                node["raw"] = fixed_content
-
-
-def _render_ast_to_markdown(ast: list[dict[str, Any]]) -> str:
-    """Render modified AST back to markdown using mistune's built-in renderer."""
-
-    # Create a markdown renderer with math plugin support
-    class MathMarkdownRenderer(MarkdownRenderer):
-        def inline_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
-            raw = str(token.get("raw", ""))  # pyright: ignore[reportAny]
-            return f"${raw}$"
-
-        def block_math(self, token: dict[str, Any], state: BlockState) -> str:  # noqa: ARG002
-            raw = str(token.get("raw", ""))  # pyright: ignore[reportAny]
-            return f"$${raw}$$"
-
-        @override
-        def block_code(self, token: dict[str, Any], state: BlockState) -> str:
-            # Do not force fences; rely on base to compute safe markers.
-            # We already normalized attrs.info to 'typ' in AST fix step.
-            return super().block_code(token, state)  # pyright: ignore[reportUnknownMemberType]
-
-    # Create the markdown renderer
-    renderer = MathMarkdownRenderer()
-
-    # Create a block state (required for the renderer)
-    state = BlockState()
-
-    # Render the AST back to markdown
-    return renderer(ast, state)
+        match block:
+            case CodeblockTypstBlock():
+                if tok.type == "fence":
+                    tok.content = new_content
+                    tok.info = "typ"
+            case BlockTypstBlock():
+                if tok.type in ("math_block", "block_math"):
+                    tok.content = new_content
+            case InlineTypstBlock():
+                if tok.type == "inline" and tok.children:
+                    occurrence = block.ast_path[1] if len(block.ast_path) > 1 else 0
+                    seen = 0
+                    for child in tok.children:
+                        if child.type in ("math_inline", "inline_math"):
+                            if seen == occurrence:
+                                child.content = new_content
+                                break
+                            seen += 1
 
 
 def reconstruct_markdown_with_fixes(
     original_content: str, typst_blocks: list[TypstBlock], fixed_contents: dict[str, str]
 ) -> str:
-    """Reconstruct markdown with fixed Typst content using AST-based replacement."""
+    """Reconstruct markdown by mutating the markdown-it token stream and rendering via mdformat."""
     if not fixed_contents:
         return original_content
 
-    # Use AST-based reconstruction (proper approach)
+    # Build mdformat-configured parser/renderer and parse
+    md = _build_mdformat_mdit()
+    tokens = md.parse(original_content)
 
-    # Parse original content to AST
-    parser: Markdown = mistune.create_markdown(renderer="ast", plugins=["math"])  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    ast = parser(original_content)  # pyright: ignore[reportUnknownVariableType]
+    # Apply in-place fixes to tokens
+    _apply_token_fixes(tokens, typst_blocks, fixed_contents)
 
-    if not isinstance(ast, list):
-        logger.warning("Expected list AST, got %s. Falling back to string replacement", type(ast))  # pyright: ignore[reportUnknownArgumentType]
-        msg = "Invalid AST structure"
-        raise TypeError(msg)
+    # Render back to Markdown using mdformat's MDRenderer
+    rendered = str(md.renderer.render(tokens, md.options, {}))  # pyright: ignore[reportAny]
 
-    # Apply fixes to AST
-    _apply_ast_fixes(ast, typst_blocks, fixed_contents)  # pyright: ignore[reportUnknownArgumentType]
-
-    # Render modified AST back to markdown
-    result = _render_ast_to_markdown(ast)  # pyright: ignore[reportUnknownArgumentType]
-
-    if result:
-        logger.info("Successfully applied %d AST-based fixes", len(fixed_contents))
-        return result
-    msg = "AST rendering failed"
-    raise ValueError(msg)
+    # Return without an additional global formatting pass to minimize diffs
+    logger.info("Successfully applied %d token-based fixes", len(fixed_contents))
+    return rendered
