@@ -94,6 +94,13 @@ Example $$A &= B \ &= C$$, as opposed to $$A &= B \\\n&= C\n$$
 - `P^3 = mat(& -1 & 0 & 1 & 2 \ -1 & 0.044 & 0.232 & 0.444 & 0.280 \` for matrix → Use comma to separate elements and semicolon to separate rows.
 - `\bordermatrix` → Use proper Typst `mat(...)`. Simple example: `mat(, "col1 header", "col2 header"; "row1 header", "col1 row1 cell", "col2 row2 cell")`. More realistic example: `bold(P) = mat(, 0, 1, 2, 3, dots, N-1; 0, p_0, 1-p_0, 0, 0, dots, 0; 1, p_1, 0, 1-p_1, 0, dots, 0; 2, p_2, 0, 0, 1-p_2, dots, 0; 3, p_3, 0, 0, 0, dots, 0; dots.v, dots.v, dots.v, dots.v, dots.v, dots.down, dots.v; N-1, 1, 0, 0, 0, dots, 0;)`
 
+## Final Remarks on Output
+
+In this document, when backtick is used to enclose something,
+it means the content inside is something valid within math environment, but does not form a complete formula example.
+
+In your output, do not use backtick (`) before or after dollar signs, and in general, not inside math environment.
+
 ## Goal
 
 Produce syntactically correct, idiomatic Typst code that compiles without errors while preserving mathematical meaning and following modern typesetting conventions.
