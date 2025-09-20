@@ -9,6 +9,7 @@ biomejs
 bordermatrix
 chemfig
 circuitikz
+dollarmath
 dplot
 idempotently
 ipynb
@@ -17,6 +18,8 @@ lecproc
 litellm
 mathbb
 mathbf
+mdformat
+mdit
 mybordermatrix
 natsorted
 openrouter
