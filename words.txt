@@ -11,6 +11,7 @@ chemfig
 circuitikz
 dollarmath
 dplot
+hline
 idempotently
 ipynb
 jupytext
@@ -31,3 +32,4 @@ tikz
 tikzpicture
 Typst
 usepackage
+vline
