@@ -6,12 +6,13 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     drafting_model: str = "gemini/gemini-2.5-pro"
-    fixing_model: str = "gemini/gemini-2.5-flash"
+    fixing_model: str = "openrouter/x-ai/grok-4-fast:free"
     max_concurrency: int = 16
     request_timeout_s: float = 600.0
     output_extension: str = "md"
     max_retry_attempts: int = 5
 
+    enable_fixing_phase: bool = True
     # Context configuration for fixing
     context_lines: int = 5  # Number of context lines before/after Typst blocks for LLM fixing
 

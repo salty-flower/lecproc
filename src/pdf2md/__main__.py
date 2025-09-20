@@ -22,7 +22,6 @@ from .models import SystemMessage, UserMessage, compose_pdf_user_messages
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
 from .typst_parser import extract_typst_blocks
-from .typst_validator import has_any_typst_errors
 from .utils import discover_pdf_files, format_display_path, output_path_for
 
 
@@ -323,7 +322,7 @@ async def _convert_one(
                     logger.info("Phase 1 complete: Saved intermediate markdown to %s", intermediate_path.name)
 
         # Phase 2: Typst validation and fixing
-        if text:
+        if text and settings.enable_fixing_phase:
             logger.info("Phase 2: Validating and fixing Typst content for %s", pdf_path.name)
 
             # Extract Typst blocks from the generated markdown
@@ -332,27 +331,16 @@ async def _convert_one(
             if typst_blocks:
                 logger.info("Found %d Typst block(s) in %s", len(typst_blocks), pdf_path.name)
 
-                # Check for Typst compilation errors
-                has_errors, _error_message = await has_any_typst_errors(typst_blocks, logger_name)
+                # Always run the iterative fixer; it will no-op if all are valid
+                fixed_text, all_fixed = await fix_typst_errors_iteratively(
+                    text, logger_name, max_iterations=4, max_fix_attempts=3
+                )
 
-                if has_errors:
-                    logger.warning("Found Typst errors in %s, attempting to fix", pdf_path.name)
-
-                    # Attempt to fix errors iteratively
-                    fixed_text, all_fixed = await fix_typst_errors_iteratively(
-                        text, logger_name, max_iterations=2, max_fix_attempts=3
-                    )
-
-                    if all_fixed:
-                        logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
-                        text = fixed_text
-                    else:
-                        logger.warning(
-                            "Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name
-                        )
-                        text = fixed_text
+                text = fixed_text
+                if all_fixed:
+                    logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
                 else:
-                    logger.info("All Typst blocks validated successfully for %s", pdf_path.name)
+                    logger.warning("Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name)
             else:
                 logger.info("No Typst blocks found in %s", pdf_path.name)
 
@@ -362,7 +350,7 @@ async def _convert_one(
 
             logger.info("Converted: %s -> %s. Removed intermediate file", pdf_path.name, output_path.name)
         else:
-            logger.warning("No text returned for %s", pdf_path.name)
+            logger.info("Skipping fixing phase due to missing text or disabling fixing phase")
     except Exception:
         logger.exception("Failed to convert %s", pdf_path)
     finally:
