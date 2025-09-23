@@ -147,7 +147,7 @@ class TypstMdformatExtension:
     @staticmethod
     def update_mdit(mdit: MarkdownIt) -> None:
         # Enable $...$ and $$...$$ support
-        _: MarkdownIt = mdit.use(dollarmath_plugin)
+        _: MarkdownIt = mdit.use(dollarmath_plugin, double_inline=True)
 
     # Renderer functions for dollarmath tokens
     @staticmethod
@@ -162,8 +162,10 @@ class TypstMdformatExtension:
     RENDERERS: ClassVar[dict[str, Callable[[RenderTreeNode, RenderContext], str]]] = {
         "math_inline": _render_math_inline,
         "inline_math": _render_math_inline,  # alias seen in some plugin versions
+        "math_inline_double": _render_math_block,  # render inline-double as display
         "math_block": _render_math_block,
         "block_math": _render_math_block,  # alias seen in some plugin versions
+        "math_block_label": _render_math_block,  # labeled display math
     }
 
 
@@ -229,7 +231,8 @@ def _walk_tokens_for_typst(tokens: Iterable[Token], markdown_content: str) -> li
             continue
 
         # Dollar math block via plugin: commonly "math_block" (also handle legacy "block_math")
-        if ttype in ("math_block", "block_math"):
+        # also handle labeled variant "math_block_label"
+        if ttype in ("math_block", "block_math", "math_block_label"):
             content = token.content
             token_map = token.map
             line_start = (token_map[0] + 1) if token_map else 1
@@ -261,7 +264,7 @@ def _walk_tokens_for_typst(tokens: Iterable[Token], markdown_content: str) -> li
             math_seen = 0
             for child in children:
                 ctype = child.type
-                if ctype in ("math_inline", "inline_math"):
+                if ctype in ("math_inline", "inline_math", "math_inline_double"):
                     content = child.content
 
                     context_before, context_after = _extract_context_lines(
@@ -316,14 +319,14 @@ def _apply_token_fixes(tokens: list[Token], typst_blocks: list[TypstBlock], fixe
                     tok.content = new_content
                     tok.info = "typ"
             case BlockTypstBlock():
-                if tok.type in ("math_block", "block_math"):
+                if tok.type in ("math_block", "block_math", "math_block_label"):
                     tok.content = new_content
             case InlineTypstBlock():
                 if tok.type == "inline" and tok.children:
                     occurrence = block.ast_path[1] if len(block.ast_path) > 1 else 0
                     seen = 0
                     for child in tok.children:
-                        if child.type in ("math_inline", "inline_math"):
+                        if child.type in ("math_inline", "inline_math", "math_inline_double"):
                             if seen == occurrence:
                                 child.content = new_content
                                 break
