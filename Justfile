@@ -14,13 +14,13 @@ format-json:
 [parallel]
 format: format-python format-sh format-json
 
-check-python-mypy:
+check-python-mypy: format-python
     uv run mypy src
 
-check-python-basedpyright:
+check-python-basedpyright: format-python
     uv run basedpyright src
 
-check-python-ruff:
+check-python-ruff: format-python
     uv run ruff check src
 
 [parallel]
