@@ -1,12 +1,12 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
-import re
 from pathlib import Path
 from typing import cast
 
 import anyio
 import litellm
+import regex as re
 
 from logs import get_logger
 

@@ -1,11 +1,11 @@
 """Typst validation and parallel compilation utilities."""
 
 import asyncio
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
+import regex as re
 
 from logs import get_logger
 
