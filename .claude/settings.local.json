@@ -9,7 +9,10 @@
       "Bash(uv add:*)",
       "Bash(dir:*)",
       "Bash(uv run ruff:*)",
-      "Bash(typst compile:*)"
+      "Bash(typst compile:*)",
+      "Bash(rg:*)",
+      "Bash(uv pip show:*)",
+      "WebFetch(domain:docs.litellm.ai)"
     ],
     "deny": [],
     "ask": []

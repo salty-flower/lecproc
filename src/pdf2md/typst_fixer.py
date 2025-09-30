@@ -7,6 +7,8 @@ from typing import cast
 import anyio
 import litellm
 import regex as re
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import Choices, ModelResponse
 
 from logs import get_logger
 
@@ -42,6 +44,7 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             surrounding_context=block.get_context_for_llm(),  # Context without AST paths
         )
 
+        # In this helper we still accept a concrete model name; router usage is orchestrated at higher level
         response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
             model=model,
             messages=messages,
@@ -135,6 +138,9 @@ async def fix_typst_errors(
         if content_key not in unique_fixes and content_key not in progress.fixes:
             unique_fixes[content_key] = (result.block, result.error_message)
 
+    # Build a Router for fixing with controlled fallbacks via settings helpers
+    router, preferred_model = settings.build_router_and_preferred("fixing")
+
     for attempt in range(max_attempts):
         remaining_fixes = {k: v for k, v in unique_fixes.items() if k not in progress.fixes}
 
@@ -150,11 +156,25 @@ async def fix_typst_errors(
         async def fix_single_wrapper(original_content: str, fix_info: tuple[TypstBlock, str]) -> tuple[str, str | None]:
             block, error_message = fix_info
             try:
-                fixed_content = await fix_single_typst_error(
-                    block=block,
-                    error_message=error_message,
-                    model=settings.fixing_model,
+                # Use router to attempt completion with preferred model and fallbacks
+                prompts = await get_rendered_agent(
+                    "fixer",
+                    Path(__file__).parent / "prompts",
+                    buggy_code=block.content,
+                    block_type=block.type,
+                    compiler_error_message=error_message,
+                    location=block.location,
+                    surrounding_context=block.get_context_for_llm(),
                 )
+                response: ModelResponse = await router.acompletion(
+                    model=preferred_model,
+                    messages=cast(list[AllMessageValues], prompts),
+                    stream=False,
+                    num_retries=settings.max_retry_attempts - 1,
+                )
+                choice = cast(Choices, response.choices[0])
+                response_text = choice.message.content
+                fixed_content = _sanitize_llm_fix(response_text or "", block.type)
             except (OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Exception during fix for content: %s", original_content[:50] + "...")
                 return original_content, None

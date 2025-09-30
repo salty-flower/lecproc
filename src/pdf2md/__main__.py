@@ -11,6 +11,8 @@ from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.router import Router
+from litellm.types.utils import Choices, ModelResponse
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
@@ -18,7 +20,7 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
-from .models import SystemMessage, UserMessage, compose_pdf_user_messages
+from .models import compose_pdf_user_messages
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
 from .typst_parser import extract_typst_blocks
@@ -133,20 +135,14 @@ class Cli(CommonCliSettings):
     @computed_field
     @property
     def model(self) -> str:
+        # Legacy single-model property kept for CLI display; routing uses deployments
         return settings.drafting_model
 
     @override
     async def cli_cmd_async(self) -> None:
-        # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
-        self.logger.info("Using %s for drafting and %s for fixing", settings.drafting_model, settings.fixing_model)
-        match self.model.split("/", 1):
-            case ["openrouter", _]:
-                # OpenRouter models are assumed to support PDF input
-                pass
-            case _:
-                if not litellm.utils.supports_pdf_input(self.model, None):
-                    self.logger.error("Model '%s' does not support PDF input. Aborting.", self.model)
-                    return
+        # Build Router and preferred model via settings helper
+        router, preferred_model = settings.build_router_and_preferred("drafting")
+        self.logger.info("Using drafting preferred model: %s", preferred_model)
 
         pdf_files: list[Path] = discover_pdf_files(self.root_path)
         if not pdf_files:
@@ -218,7 +214,8 @@ class Cli(CommonCliSettings):
                     tg.start_soon(
                         _convert_one,
                         pdf_path,
-                        self.model,
+                        router,
+                        preferred_model,
                         progress,
                         task_id,
                         semaphore,
@@ -249,7 +246,8 @@ class Cli(CommonCliSettings):
 
 async def _convert_one(
     pdf_path: Path,
-    model: str,
+    router: Router,
+    preferred_model: str,
     progress: Progress,
     task_id: TaskID,
     semaphore: anyio.Semaphore,
@@ -287,9 +285,7 @@ async def _convert_one(
                 async with await open_file(pdf_path, "rb") as f:
                     pdf_bytes = await f.read()
                 base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-                messages: list[UserMessage | SystemMessage] = await compose_pdf_user_messages(
-                    pdf_path.name, base64_pdf, general_context
-                )
+                messages = await compose_pdf_user_messages(pdf_path.name, base64_pdf, general_context)
 
                 # Create retry progress callback
                 retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
@@ -297,9 +293,10 @@ async def _convert_one(
                 # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
                 try:
                     with anyio.fail_after(settings.request_timeout_s):
-                        response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
-                            model=model,
+                        response: ModelResponse = await router.acompletion(
+                            model=preferred_model,
                             messages=messages,
+                            stream=False,
                             num_retries=settings.max_retry_attempts - 1,
                             callbacks=[retry_callback],
                         )
@@ -310,10 +307,8 @@ async def _convert_one(
                     logger.error("LLM API vendor boom")  # noqa: TRY400
                     return
 
-                text = cast(
-                    "list[litellm.Choices]",
-                    cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
-                )[0].message.content
+                choice = cast(Choices, response.choices[0])
+                text = cast(str, choice.message.content)
 
                 # Save intermediate markdown after Phase 1 (before Typst validation)
                 if text:
