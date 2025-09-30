@@ -2,17 +2,16 @@
 
 import hashlib
 from pathlib import Path
-from typing import cast
 
 import anyio
 import litellm
 import regex as re
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import ModelResponse
 
 from logs import get_logger
 
 from .fix_progress import TypstFixEntry, TypstFixProgress
+from .message_utils import extract_choice_text
 from .prompt_loader import get_rendered_agent
 from .settings import settings
 from .typst_parser import TypstBlock, extract_typst_blocks, reconstruct_markdown_with_fixes
@@ -45,16 +44,20 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
         )
 
         # In this helper we still accept a concrete model name; router usage is orchestrated at higher level
-        response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+        raw_response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
             model=model,
             messages=messages,
         )
 
+        response = (
+            raw_response if isinstance(raw_response, ModelResponse) else ModelResponse.model_validate(raw_response)
+        )
+
         # Parse the response to extract fixed content
-        response_text = cast(
-            "list[litellm.Choices]",
-            cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
-        )[0].message.content  # type: ignore[reportUnknownMemberType]
+        first_choice = response.choices[0]
+        response_text, was_streaming = extract_choice_text(first_choice)
+        if was_streaming:
+            logger.warning("Streaming response received in fix_single_typst_error; ignoring delta content")
     except (TimeoutError, litellm.exceptions.InternalServerError) as e:
         # Only catch the same humble set as main module
         logger.warning("LLM error in fix_single_typst_error: %s", e)
@@ -166,14 +169,18 @@ async def fix_typst_errors(
                     location=block.location,
                     surrounding_context=block.get_context_for_llm(),
                 )
-                response: ModelResponse = await router.acompletion(
+                response: ModelResponse = await router.acompletion(  # pyright: ignore[reportUnknownMemberType]
                     model=preferred_model,
-                    messages=cast(list[AllMessageValues], prompts),
+                    messages=prompts,
                     stream=False,
                     num_retries=settings.max_retry_attempts - 1,
                 )
-                choice = cast(Choices, response.choices[0])
-                response_text = choice.message.content
+                first_choice = response.choices[0]
+                response_text, was_streaming = extract_choice_text(first_choice)
+                if was_streaming:
+                    logger.warning(
+                        "Streaming response received during router fix; ignoring delta content",
+                    )
                 fixed_content = _sanitize_llm_fix(response_text or "", block.type)
             except (OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Exception during fix for content: %s", original_content[:50] + "...")

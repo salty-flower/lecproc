@@ -3,7 +3,7 @@ import contextlib
 import logging
 from asyncio import CancelledError
 from pathlib import Path
-from typing import Any, ClassVar, cast, override
+from typing import Any, ClassVar, override
 
 import anyio
 import litellm
@@ -12,7 +12,7 @@ from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.router import Router
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import ModelResponse  # noqa: TC002
 from pydantic import computed_field
 from pydantic_settings import CliPositionalArg
 from rich.progress import Progress
@@ -20,6 +20,7 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
+from .message_utils import extract_choice_text
 from .models import compose_pdf_user_messages
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
@@ -293,7 +294,7 @@ async def _convert_one(
                 # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
                 try:
                     with anyio.fail_after(settings.request_timeout_s):
-                        response: ModelResponse = await router.acompletion(
+                        response: ModelResponse = await router.acompletion(  # pyright: ignore[reportUnknownMemberType]
                             model=preferred_model,
                             messages=messages,
                             stream=False,
@@ -307,8 +308,10 @@ async def _convert_one(
                     logger.error("LLM API vendor boom")  # noqa: TRY400
                     return
 
-                choice = cast(Choices, response.choices[0])
-                text = cast(str, choice.message.content)
+                first_choice = response.choices[0]
+                text, was_streaming = extract_choice_text(first_choice)
+                if was_streaming:
+                    logger.warning("Received streaming choice despite stream=False; ignoring delta content")
 
                 # Save intermediate markdown after Phase 1 (before Typst validation)
                 if text:

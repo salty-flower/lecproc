@@ -18,8 +18,8 @@ class LLMDeployment(BaseModel):
 
 
 class Settings(BaseSettings):
-    # Back-compat single-model settings (used to derive defaults for deployments)
-    # drafting_model: str = "gemini/gemini-2.5-pro"
+    # Back-compat single-model settings (used to derive defaults for deployments).
+    # Legacy default model was gemini/gemini-2.5-pro; retained here for context.
     drafting_model: str = "openrouter/google/gemini-2.5-pro"
     fixing_model: str = "openrouter/x-ai/grok-4-fast:free"
 
@@ -59,7 +59,8 @@ class Settings(BaseSettings):
             return self.drafting_deployments or self._derive_default_deployments(kind)
         if kind == "fixing":
             return self.fixing_deployments or self._derive_default_deployments(kind)
-        raise ValueError(f"Unknown deployment kind: {kind}")
+        msg = f"Unknown deployment kind: {kind}"
+        raise ValueError(msg)
 
     def get_effective_deployments(self, kind: str) -> list[LLMDeployment]:
         """Apply allow_paid_fallback to filter deployments; if that removes all, fall back to full list."""
@@ -77,7 +78,8 @@ class Settings(BaseSettings):
         deployments = self.get_effective_deployments(kind)
         if not deployments:
             # Should never happen due to derivation fallback
-            raise RuntimeError(f"No deployments configured for kind={kind}")
+            msg = f"No deployments configured for kind={kind}"
+            raise RuntimeError(msg)
 
         model_list = [{"model_name": d.model, "litellm_params": {"model": d.model}} for d in deployments]
         router = Router(model_list=model_list)
