@@ -6,6 +6,12 @@ from typing import Any, Literal
 import anyio
 import yaml
 from jinja2 import BaseLoader, Environment, meta, nodes
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionUserMessage,
+)
 from pydantic import BaseModel, Field, field_validator
 
 from logs import get_logger
@@ -165,7 +171,7 @@ async def render_agent_prompt(
     agent: AgentPrompt,
     context: TemplateContext,
     **template_vars: Any,  # noqa: ANN401  # pyright: ignore[reportAny]
-) -> list[dict[str, str]]:
+) -> list[AllMessageValues]:
     """Safely render agent prompt with component substitution."""
     env = Environment(
         loader=BaseLoader(),
@@ -176,21 +182,31 @@ async def render_agent_prompt(
     # Build render context
     render_context = await context.get_context(**template_vars)
 
-    rendered_messages: list[dict[str, str]] = []
+    rendered_messages: list[AllMessageValues] = []
     for msg in agent.messages:
+        content = msg.content
         try:
             template = env.from_string(msg.content)
             rendered_content = await template.render_async(render_context)
-            rendered_messages.append({"role": msg.role, "content": rendered_content.strip()})
+            content = rendered_content.strip()
         except Exception:
             logger.exception("Error rendering template for %s message", msg.role)
-            # Fall back to original content if rendering fails
-            rendered_messages.append({"role": msg.role, "content": msg.content})
+
+        match msg.role:
+            case "system":
+                sys_msg: ChatCompletionSystemMessage = {"role": "system", "content": content}
+                rendered_messages.append(sys_msg)
+            case "assistant":
+                asst_msg: ChatCompletionAssistantMessage = {"role": "assistant", "content": content}
+                rendered_messages.append(asst_msg)
+            case _:
+                user_msg: ChatCompletionUserMessage = {"role": "user", "content": content}
+                rendered_messages.append(user_msg)
 
     return rendered_messages
 
 
-async def get_rendered_agent(agent_name: str, prompts_dir: Path, **template_vars: Any) -> list[dict[str, str]]:  # noqa: ANN401  # pyright: ignore[reportAny]
+async def get_rendered_agent(agent_name: str, prompts_dir: Path, **template_vars: Any) -> list[AllMessageValues]:  # noqa: ANN401  # pyright: ignore[reportAny]
     """Load and render an agent prompt by name."""
     agent_file = prompts_dir / "agents" / f"{agent_name}.yaml"
 

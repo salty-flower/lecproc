@@ -7,6 +7,7 @@ from typing import cast
 import anyio
 import litellm
 import regex as re
+from litellm.types.utils import ModelResponse
 
 from logs import get_logger
 
@@ -47,10 +48,12 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             messages=messages,
         )
 
+        response = response if isinstance(response, ModelResponse) else ModelResponse.model_validate(response)
+
         # Parse the response to extract fixed content
         response_text = cast(
             "list[litellm.Choices]",
-            cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
+            response.choices,
         )[0].message.content  # type: ignore[reportUnknownMemberType]
     except (TimeoutError, litellm.exceptions.InternalServerError) as e:
         # Only catch the same humble set as main module

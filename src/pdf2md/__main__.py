@@ -18,7 +18,7 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
-from .models import SystemMessage, UserMessage, compose_pdf_user_messages
+from .models import compose_pdf_user_messages
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
 from .typst_parser import extract_typst_blocks
@@ -287,9 +287,7 @@ async def _convert_one(
                 async with await open_file(pdf_path, "rb") as f:
                     pdf_bytes = await f.read()
                 base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-                messages: list[UserMessage | SystemMessage] = await compose_pdf_user_messages(
-                    pdf_path.name, base64_pdf, general_context
-                )
+                messages = await compose_pdf_user_messages(pdf_path.name, base64_pdf, general_context)
 
                 # Create retry progress callback
                 retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
