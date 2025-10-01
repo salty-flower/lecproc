@@ -184,32 +184,24 @@ async def render_agent_prompt(
 
     rendered_messages: list[AllMessageValues] = []
     for msg in agent.messages:
+        content = msg.content
         try:
             template = env.from_string(msg.content)
             rendered_content = await template.render_async(render_context)
             content = rendered_content.strip()
-            if msg.role == "system":
-                sys_msg: ChatCompletionSystemMessage = {"role": "system", "content": content}
-                rendered_messages.append(sys_msg)
-            elif msg.role == "assistant":
-                asst_msg: ChatCompletionAssistantMessage = {"role": "assistant", "content": content}
-                rendered_messages.append(asst_msg)
-            else:
-                user_msg: ChatCompletionUserMessage = {"role": "user", "content": content}
-                rendered_messages.append(user_msg)
         except Exception:
             logger.exception("Error rendering template for %s message", msg.role)
-            # Fall back to original content if rendering fails
-            fallback_content = msg.content
-            if msg.role == "system":
-                sys_msg_fb: ChatCompletionSystemMessage = {"role": "system", "content": fallback_content}
-                rendered_messages.append(sys_msg_fb)
-            elif msg.role == "assistant":
-                asst_msg_fb: ChatCompletionAssistantMessage = {"role": "assistant", "content": fallback_content}
-                rendered_messages.append(asst_msg_fb)
-            else:
-                user_msg_fb: ChatCompletionUserMessage = {"role": "user", "content": fallback_content}
-                rendered_messages.append(user_msg_fb)
+
+        match msg.role:
+            case "system":
+                sys_msg: ChatCompletionSystemMessage = {"role": "system", "content": content}
+                rendered_messages.append(sys_msg)
+            case "assistant":
+                asst_msg: ChatCompletionAssistantMessage = {"role": "assistant", "content": content}
+                rendered_messages.append(asst_msg)
+            case _:
+                user_msg: ChatCompletionUserMessage = {"role": "user", "content": content}
+                rendered_messages.append(user_msg)
 
     return rendered_messages
 
