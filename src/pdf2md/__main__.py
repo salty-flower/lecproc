@@ -18,11 +18,18 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
-from .models import compose_pdf_user_messages
+from .models import compose_user_messages
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
 from .typst_parser import extract_typst_blocks
-from .utils import discover_pdf_files, format_display_path, output_path_for
+from .utils import (
+    detect_output_collisions,
+    discover_source_files,
+    format_display_path,
+    get_input_file_metadata,
+    output_path_for,
+    supported_extensions_display,
+)
 
 
 async def load_context_file(context_path: Path) -> str:
@@ -39,11 +46,11 @@ def discover_context_file(root_path: Path, extensions: list[str], base_name: str
 
 
 class RetryProgressCallback(CustomLogger):
-    def __init__(self, progress: Progress, task_id: TaskID, pdf_name: str) -> None:
+    def __init__(self, progress: Progress, task_id: TaskID, file_name: str) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.progress: Progress = progress
         self.task_id: TaskID = task_id
-        self.pdf_name: str = pdf_name
+        self.file_name: str = file_name
         self.retry_count: int = 0
         self.max_retries: int = settings.max_retry_attempts
 
@@ -52,7 +59,7 @@ class RetryProgressCallback(CustomLogger):
         if self.retry_count > 0:
             self.progress.update(
                 self.task_id,
-                description=f"Converting PDFs (retry {self.retry_count}/{self.max_retries - 1} for {self.pdf_name})",
+                description=f"Converting documents (retry {self.retry_count}/{self.max_retries - 1} for {self.file_name})",
             )
 
     @override
@@ -61,14 +68,14 @@ class RetryProgressCallback(CustomLogger):
 
 
 def plan_processing(
-    pdf_files: list[Path],
+    source_files: list[Path],
     overwrite: bool,
 ) -> tuple[list[Path], list[Path], list[Path]]:
-    """Plan which PDFs to process, which to skip, and which empty outputs to remove.
+    """Plan which documents to process, which to skip, and which empty outputs to remove.
 
     Returns:
-        - to_process: list of PDF files to convert
-        - skipped: list of PDF files skipped due to existing non-empty outputs (when not overwriting)
+        - to_process: list of source files to convert
+        - skipped: list of source files skipped due to existing non-empty outputs (when not overwriting)
         - removed_empty: list of empty output files that were deleted before processing begins
 
     """
@@ -76,8 +83,8 @@ def plan_processing(
     skipped: list[Path] = []
     removed_empty: list[Path] = []
 
-    for pdf_path in pdf_files:
-        output_path = output_path_for(pdf_path)
+    for source_path in source_files:
+        output_path = output_path_for(source_path)
         try:
             if output_path.exists():
                 try:
@@ -89,30 +96,30 @@ def plan_processing(
                     with contextlib.suppress(OSError):
                         output_path.unlink(missing_ok=True)
                     removed_empty.append(output_path)
-                    to_process.append(pdf_path)
+                    to_process.append(source_path)
                     continue
 
                 if not overwrite:
-                    skipped.append(pdf_path)
+                    skipped.append(source_path)
                     continue
 
-            to_process.append(pdf_path)
+            to_process.append(source_path)
         except OSError:
             # If any unexpected FS issue occurs, err on the side of processing
-            to_process.append(pdf_path)
+            to_process.append(source_path)
 
     return to_process, skipped, removed_empty
 
 
 class Cli(CommonCliSettings):
-    """Bulk PDF → Markdown with Typst formulas via LiteLLM document understanding.
+    """Bulk document → Markdown with Typst formulas via LiteLLM document understanding.
 
     Two-phase process:
-    1. Initial drafting: Sends the raw PDF (base64) to the model for Markdown conversion
+    1. Initial drafting: Sends the raw document (base64) to the model for Markdown conversion
     2. Typst validation: Parses output for Typst formulas/code blocks, validates syntax,
        and uses LLM to fix any compilation errors iteratively.
 
-    Writes the final result to a `.md` file with the same basename next to the source PDF.
+    Writes the final result to a `.md` file with the same basename next to the source document.
     """
 
     is_root: ClassVar[bool | None] = True
@@ -139,26 +146,61 @@ class Cli(CommonCliSettings):
     async def cli_cmd_async(self) -> None:
         # LiteLLM doesn't know about OpenRouter models capabilities yet, so we waive this check for OpenRouter models for now
         self.logger.info("Using %s for drafting and %s for fixing", settings.drafting_model, settings.fixing_model)
+        source_files: list[Path] = discover_source_files(self.root_path)
+        if not source_files:
+            self.logger.warning(
+                "No supported files (%s) found under %s",
+                supported_extensions_display(),
+                self.root_path,
+            )
+            return
+
+        has_pdf_inputs = False
+        has_image_inputs = False
+        for path in source_files:
+            metadata = get_input_file_metadata(path)
+            if metadata is None:
+                # Should not happen because discover_source_files filters these out
+                continue
+            if metadata.category == "pdf":
+                has_pdf_inputs = True
+            elif metadata.category == "image":
+                has_image_inputs = True
+
         match self.model.split("/", 1):
             case ["openrouter", _]:
-                # OpenRouter models are assumed to support PDF input
+                # OpenRouter models are assumed to support these inputs for now
                 pass
             case _:
-                if not litellm.utils.supports_pdf_input(self.model, None):
+                if has_pdf_inputs and not litellm.utils.supports_pdf_input(self.model, None):
                     self.logger.error("Model '%s' does not support PDF input. Aborting.", self.model)
                     return
+                if has_image_inputs and not litellm.utils.supports_vision(self.model, None):
+                    self.logger.error("Model '%s' does not support image input. Aborting.", self.model)
+                    return
 
-        pdf_files: list[Path] = discover_pdf_files(self.root_path)
-        if not pdf_files:
-            self.logger.warning("No PDF files found under %s", self.root_path)
-            return
         self.logger.info(
-            "Discovered %d PDF file(s) under %s",
-            len(pdf_files),
+            "Discovered %d supported file(s) under %s",
+            len(source_files),
             self.root_path,
         )
 
-        to_process, skipped, removed_empty = plan_processing(pdf_files, self.overwrite)
+        collisions = detect_output_collisions(source_files)
+        if collisions:
+            collision_details = ", ".join(
+                f"{format_display_path(output_path, self.root_path)} ← "
+                + ", ".join(
+                    format_display_path(src, self.root_path) for src in sorted(sources, key=lambda p: str(p).lower())
+                )
+                for output_path, sources in sorted(collisions.items(), key=lambda item: str(item[0]).lower())
+            )
+            self.logger.error(
+                "Multiple source files would write to the same output. Rename conflicting files and retry: %s",
+                collision_details,
+            )
+            return
+
+        to_process, skipped, removed_empty = plan_processing(source_files, self.overwrite)
 
         if removed_empty:
             self.logger.info(
@@ -178,7 +220,7 @@ class Cli(CommonCliSettings):
             self.logger.info("Nothing to process after skip checks.")
             return
         self.logger.info(
-            "Processing %d PDF file(s):\n%s",
+            "Processing %d file(s):\n%s",
             len(to_process),
             ", ".join(format_display_path(p, self.root_path) for p in to_process),
         )
@@ -210,14 +252,14 @@ class Cli(CommonCliSettings):
             general_context = None
 
         with progress:
-            task_id: TaskID = progress.add_task("Converting PDFs", total=len(to_process))
+            task_id: TaskID = progress.add_task("Converting documents", total=len(to_process))
 
             semaphore = anyio.Semaphore(self.concurrency)
             async with anyio.create_task_group() as tg:
-                for pdf_path in to_process:
+                for source_path in to_process:
                     tg.start_soon(
                         _convert_one,
-                        pdf_path,
+                        source_path,
                         self.model,
                         progress,
                         task_id,
@@ -228,8 +270,8 @@ class Cli(CommonCliSettings):
 
             # The per-task function updates the progress bar. For a quick summary,
             # re-scan outcomes by checking .md files existence.
-            for pdf_path in to_process:
-                output_path = output_path_for(pdf_path)
+            for source_path in to_process:
+                output_path = output_path_for(source_path)
                 if output_path.exists() and output_path.stat().st_size > 0:
                     successes += 1
                 else:
@@ -248,7 +290,7 @@ class Cli(CommonCliSettings):
 
 
 async def _convert_one(
-    pdf_path: Path,
+    source_path: Path,
     model: str,
     progress: Progress,
     task_id: TaskID,
@@ -259,7 +301,12 @@ async def _convert_one(
     logger = get_logger(logger_name)
 
     try:
-        output_path = output_path_for(pdf_path)
+        metadata = get_input_file_metadata(source_path)
+        if metadata is None:
+            logger.error("Skipping unsupported file type: %s", source_path.name)
+            return
+
+        output_path = output_path_for(source_path)
         intermediate_path = output_path.with_suffix(".phase1.md")
 
         # Check if Phase 1 was already completed (intermediate file exists)
@@ -284,13 +331,18 @@ async def _convert_one(
         # Phase 1: Only run if we don't have existing intermediate content
         if text is None:
             async with semaphore:
-                async with await open_file(pdf_path, "rb") as f:
-                    pdf_bytes = await f.read()
-                base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-                messages = await compose_pdf_user_messages(pdf_path.name, base64_pdf, general_context)
+                async with await open_file(source_path, "rb") as f:
+                    raw_bytes = await f.read()
+                base64_data = base64.b64encode(raw_bytes).decode("utf-8")
+                messages = await compose_user_messages(
+                    source_path.name,
+                    base64_data,
+                    metadata,
+                    general_context,
+                )
 
                 # Create retry progress callback
-                retry_callback = RetryProgressCallback(progress, task_id, pdf_path.name)
+                retry_callback = RetryProgressCallback(progress, task_id, source_path.name)
 
                 # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
                 try:
@@ -321,13 +373,13 @@ async def _convert_one(
 
         # Phase 2: Typst validation and fixing
         if text and settings.enable_fixing_phase:
-            logger.info("Phase 2: Validating and fixing Typst content for %s", pdf_path.name)
+            logger.info("Phase 2: Validating and fixing Typst content for %s", source_path.name)
 
             # Extract Typst blocks from the generated markdown
             typst_blocks = extract_typst_blocks(text)
 
             if typst_blocks:
-                logger.info("Found %d Typst block(s) in %s", len(typst_blocks), pdf_path.name)
+                logger.info("Found %d Typst block(s) in %s", len(typst_blocks), source_path.name)
 
                 # Always run the iterative fixer; it will no-op if all are valid
                 fixed_text, all_fixed = await fix_typst_errors_iteratively(
@@ -336,21 +388,24 @@ async def _convert_one(
 
                 text = fixed_text
                 if all_fixed:
-                    logger.info("Successfully fixed all Typst errors in %s", pdf_path.name)
+                    logger.info("Successfully fixed all Typst errors in %s", source_path.name)
                 else:
-                    logger.warning("Could not fix all Typst errors in %s, proceeding with partial fixes", pdf_path.name)
+                    logger.warning(
+                        "Could not fix all Typst errors in %s, proceeding with partial fixes",
+                        source_path.name,
+                    )
             else:
-                logger.info("No Typst blocks found in %s", pdf_path.name)
+                logger.info("No Typst blocks found in %s", source_path.name)
 
             # Write result
             async with await open_file(output_path, "w", encoding="utf-8") as f:
                 _ = await f.write(text)
 
-            logger.info("Converted: %s -> %s. Removed intermediate file", pdf_path.name, output_path.name)
+            logger.info("Converted: %s -> %s. Removed intermediate file", source_path.name, output_path.name)
         else:
             logger.info("Skipping fixing phase due to missing text or disabling fixing phase")
     except Exception:
-        logger.exception("Failed to convert %s", pdf_path)
+        logger.exception("Failed to convert %s", source_path)
     finally:
         progress.update(task_id, advance=1)
 

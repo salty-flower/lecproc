@@ -9,19 +9,23 @@ from litellm.types.llms.openai import (
 )
 
 from .prompt_loader import get_rendered_agent
+from .utils import InputFileMetadata
 
 
 def _is_system_message(message: AllMessageValues) -> TypeGuard[ChatCompletionSystemMessage]:
     return message["role"] == "system"
 
 
-def _pdf_data_message(data_uri: str) -> ChatCompletionUserMessage:
+def _file_data_message(data_uri: str) -> ChatCompletionUserMessage:
     file_part: ChatCompletionFileObject = {"type": "file", "file": {"file_data": data_uri}}
     return {"role": "user", "content": [file_part]}
 
 
-async def compose_pdf_user_messages(
-    pdf_file_name: str, base64_pdf: str, general_context: str | None = None
+async def compose_user_messages(
+    file_name: str,
+    base64_data: str,
+    metadata: InputFileMetadata,
+    general_context: str | None = None,
 ) -> list[AllMessageValues]:
     # Use the new modular prompt system
     prompts_dir = Path(__file__).parent / "prompts"
@@ -37,7 +41,7 @@ async def compose_pdf_user_messages(
             }
         )
 
-    messages.append({"role": "user", "content": f"Please process the PDF file named {pdf_file_name}:"})
-    messages.append(_pdf_data_message(f"data:application/pdf;base64,{base64_pdf}"))
+    messages.append({"role": "user", "content": f"Please process the {metadata.prompt_label} named {file_name}:"})
+    messages.append(_file_data_message(f"data:{metadata.mime_type};base64,{base64_data}"))
 
     return messages
