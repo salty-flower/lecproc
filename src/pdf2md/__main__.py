@@ -8,7 +8,6 @@ from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
-from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -34,8 +33,7 @@ from .utils import (
 
 
 async def load_context_file(context_path: Path) -> str:
-    async with await open_file(context_path, "r", encoding="utf-8") as f:
-        return await f.read()
+    return await anyio.Path(context_path).read_text(encoding="utf-8")
 
 
 def discover_context_file(root_path: Path, extensions: list[str], base_name: str = "context") -> Path | None:
@@ -53,9 +51,9 @@ class ProgressTracker:
     """Track per-file conversion progress and surface it through a shared task."""
 
     def __init__(self, progress: Progress, task_id: TaskID, total_files: int) -> None:
-        self._progress = progress
-        self._task_id = task_id
-        self._total_files = total_files
+        self._progress: Progress = progress
+        self._task_id: TaskID = task_id
+        self._total_files: int = total_files
         self._file_progress: dict[Path, float] = {}
         self._status: str | None = None
 
@@ -84,7 +82,7 @@ class RetryProgressCallback(CustomLogger):
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
         self.retry_count: int = 0
         self.max_retries: int = settings.max_retry_attempts
-        self._on_retry = on_retry
+        self._on_retry: Callable[[int, int], None] = on_retry
 
     @override
     def log_pre_api_call(self, model: Any, messages: Any, kwargs: Any) -> None:  # pyright: ignore[reportAny]
@@ -357,8 +355,7 @@ async def _convert_one(
         text: str | None = None
         if intermediate_path.exists():
             try:
-                async with await open_file(intermediate_path, "r", encoding="utf-8") as f:
-                    text = await f.read()
+                text = await anyio.Path(intermediate_path).read_text(encoding="utf-8")
                 if text:
                     logger.info("Found existing Phase 1 output, skipping to Phase 2: %s", intermediate_path.name)
                     set_stage(_PHASE_STAGE_DRAFT_COMPLETE, f"Reusing draft for {source_path.name}")
@@ -374,8 +371,7 @@ async def _convert_one(
         # Phase 1: Only run if we don't have existing intermediate content
         if text is None:
             async with semaphore:
-                async with await open_file(source_path, "rb") as f:
-                    raw_bytes = await f.read()
+                raw_bytes = await anyio.Path(source_path).read_bytes()
                 base64_data = base64.b64encode(raw_bytes).decode("utf-8")
                 messages = await compose_user_messages(
                     source_path.name,
@@ -417,8 +413,7 @@ async def _convert_one(
                 )[0].message.content
 
                 if text:
-                    async with await open_file(intermediate_path, "w", encoding="utf-8") as f:
-                        _ = await f.write(text)
+                    _ = await anyio.Path(intermediate_path).write_text(text, encoding="utf-8")
                     logger.info("Phase 1 complete: Saved intermediate markdown to %s", intermediate_path.name)
                     set_stage(_PHASE_STAGE_DRAFT_COMPLETE, f"Draft complete for {source_path.name}")
                 else:
@@ -467,8 +462,7 @@ async def _convert_one(
                 logger.info("No Typst blocks found in %s", source_path.name)
                 set_stage(_PHASE_STAGE_FIX_DONE, f"No Typst blocks in {source_path.name}")
 
-            async with await open_file(output_path, "w", encoding="utf-8") as f:
-                _ = await f.write(text)
+            _ = await anyio.Path(output_path).write_text(text, encoding="utf-8")
 
             if all_fixed:
                 for progress_file in progress_files:
