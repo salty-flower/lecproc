@@ -19,6 +19,7 @@ from rich.progress import Progress
 from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
+from .llm_types import CompletionResponse
 from .models import compose_user_messages
 from .rate_limit import execute_with_rate_limit_retry
 from .settings import settings
@@ -435,14 +436,15 @@ async def _convert_one(
                     set_stage(_PHASE_STAGE_DRAFTING, display)
                     await tracker.wait_for_rate_limit(seconds, display)
 
-                async def _request_completion() -> litellm.ModelResponse:
+                async def _request_completion() -> CompletionResponse:
                     with anyio.fail_after(settings.request_timeout_s):
-                        return await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+                        result = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
                             model=model,
                             messages=messages,
                             num_retries=0,
                             callbacks=[retry_callback],
                         )
+                        return cast("CompletionResponse", result)
 
                 try:
                     response = await execute_with_rate_limit_retry(
@@ -470,10 +472,14 @@ async def _convert_one(
                     set_stage(_PHASE_STAGE_COMPLETE, f"Draft failed for {source_path.name}")
                     return
 
-                text = cast(
-                    "list[litellm.Choices]",
-                    cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
-                )[0].message.content
+                choices = list(response.choices)
+                if not choices:
+                    logger.error("LLM response contained no choices for %s", source_path.name)
+                    set_stage(_PHASE_STAGE_COMPLETE, f"Empty response for {source_path.name}")
+                    return
+
+                message_content = choices[0].message.content or ""
+                text = message_content
 
                 if text:
                     _ = await anyio.Path(intermediate_path).write_text(text, encoding="utf-8")

@@ -9,11 +9,11 @@ import anyio
 import litellm
 import regex as re
 from litellm.exceptions import InternalServerError, RateLimitError
-from litellm.types.utils import ModelResponse
 
 from logs import get_logger
 
 from .fix_progress import TypstFixEntry, TypstFixProgress
+from .llm_types import CompletionResponse
 from .prompt_loader import get_rendered_agent
 from .rate_limit import execute_with_rate_limit_retry
 from .settings import settings
@@ -46,13 +46,13 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             surrounding_context=block.get_context_for_llm(),  # Context without AST paths
         )
 
-        async def _request_completion() -> ModelResponse:
+        async def _request_completion() -> CompletionResponse:
             result = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
                 model=model,
                 messages=messages,
                 num_retries=0,
             )
-            return result if isinstance(result, ModelResponse) else ModelResponse.model_validate(result)
+            return cast("CompletionResponse", result)
 
         response = await execute_with_rate_limit_retry(
             _request_completion,
@@ -62,10 +62,12 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
         )
 
         # Parse the response to extract fixed content
-        response_text = cast(
-            "list[litellm.Choices]",
-            response.choices,
-        )[0].message.content  # type: ignore[reportUnknownMemberType]
+        choices = list(response.choices)
+        if not choices:
+            logger.warning("Typst fix response returned no choices for %s", block.location)
+            return block.content
+
+        response_text = choices[0].message.content
     except (TimeoutError, InternalServerError, RateLimitError) as e:
         # Only catch the same humble set as main module
         logger.warning("LLM error in fix_single_typst_error: %s", e)

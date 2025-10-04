@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from time import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -19,6 +19,7 @@ _MAX_DESCRIPTION_LENGTH = 80
 _EPOCH_MS_THRESHOLD = 1_000_000_000_000
 _EPOCH_SECONDS_THRESHOLD = 1_000_000_000
 
+
 @dataclass(slots=True)
 class RateLimitWaitInfo:
     """Parsed information about a rate-limit response."""
@@ -28,14 +29,14 @@ class RateLimitWaitInfo:
     reason: str | None = None
 
 
-async def execute_with_rate_limit_retry(
-    call: Callable[[], Awaitable[object]],
+async def execute_with_rate_limit_retry[T](
+    call: Callable[[], Awaitable[T]],
     *,
     logger: Logger,
     max_attempts: int,
     wait_callback: Callable[[float, str | None], Awaitable[None]] | None = None,
     context: str | None = None,
-) -> object:
+) -> T:
     """Execute ``call`` retrying on :class:`RateLimitError` with bounded waits."""
 
     attempts = 0
@@ -70,13 +71,22 @@ async def execute_with_rate_limit_retry(
             joined = f" ({wait_message})" if wait_message else ""
 
             next_attempt = attempts + 1
-            logger.warning(
-                "Rate limited%s; waiting %.1fs before retrying attempt %d/%d.",
-                joined,
-                wait_seconds,
-                next_attempt,
-                max_attempts,
-            )
+            if wait_callback is None:
+                logger.warning(
+                    "Rate limited%s; waiting %.1fs before retrying attempt %d/%d.",
+                    joined,
+                    wait_seconds,
+                    next_attempt,
+                    max_attempts,
+                )
+            else:
+                logger.debug(
+                    "Rate limited%s; waiting %.1fs before retrying attempt %d/%d.",
+                    joined,
+                    wait_seconds,
+                    next_attempt,
+                    max_attempts,
+                )
 
             message_for_wait = wait_message or reason or context
 
@@ -193,11 +203,14 @@ def _parse_reset_value(value: str, *, header_key: str) -> RateLimitWaitInfo | No
     return RateLimitWaitInfo(wait_seconds=wait_seconds, reset_time=dt)
 
 
-def _decode_body(body: object) -> Mapping[str, Any] | None:
+JsonMapping = Mapping[str, object]
+
+
+def _decode_body(body: object) -> JsonMapping | None:
     if body is None:
         return None
     if isinstance(body, Mapping):
-        return body
+        return cast("JsonMapping", body)
     if isinstance(body, (bytes, bytearray)):
         try:
             body = body.decode("utf-8", errors="ignore")
@@ -209,11 +222,11 @@ def _decode_body(body: object) -> Mapping[str, Any] | None:
         except json.JSONDecodeError:
             return None
         if isinstance(decoded, Mapping):
-            return decoded
+            return cast("JsonMapping", decoded)
     return None
 
 
-def _collect_headers(error: RateLimitError, body: Mapping[str, Any] | None) -> dict[str, str]:
+def _collect_headers(error: RateLimitError, body: JsonMapping | None) -> dict[str, str]:
     headers: dict[str, str] = {}
 
     response = getattr(error, "response", None)
@@ -235,33 +248,40 @@ def _collect_headers(error: RateLimitError, body: Mapping[str, Any] | None) -> d
     return headers
 
 
-def _iter_possible_header_blocks(body: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    blocks: list[Mapping[str, Any]] = []
-    direct_headers = body.get("headers")
-    if isinstance(direct_headers, Mapping):
+def _as_mapping(value: object) -> JsonMapping | None:
+    if isinstance(value, Mapping):
+        return cast("JsonMapping", value)
+    return None
+
+
+def _iter_possible_header_blocks(body: JsonMapping) -> list[JsonMapping]:
+    blocks: list[JsonMapping] = []
+
+    direct_headers = _as_mapping(body.get("headers"))
+    if direct_headers is not None:
         blocks.append(direct_headers)
 
-    metadata = body.get("metadata")
-    if isinstance(metadata, Mapping):
-        headers = metadata.get("headers")
-        if isinstance(headers, Mapping):
+    metadata = _as_mapping(body.get("metadata"))
+    if metadata is not None:
+        headers = _as_mapping(metadata.get("headers"))
+        if headers is not None:
             blocks.append(headers)
 
-    error_block = body.get("error")
-    if isinstance(error_block, Mapping):
-        error_headers = error_block.get("headers")
-        if isinstance(error_headers, Mapping):
+    error_block = _as_mapping(body.get("error"))
+    if error_block is not None:
+        error_headers = _as_mapping(error_block.get("headers"))
+        if error_headers is not None:
             blocks.append(error_headers)
-        error_metadata = error_block.get("metadata")
-        if isinstance(error_metadata, Mapping):
-            nested_headers = error_metadata.get("headers")
-            if isinstance(nested_headers, Mapping):
+        error_metadata = _as_mapping(error_block.get("metadata"))
+        if error_metadata is not None:
+            nested_headers = _as_mapping(error_metadata.get("headers"))
+            if nested_headers is not None:
                 blocks.append(nested_headers)
 
     return blocks
 
 
-def _extract_reason(error: RateLimitError, body: Mapping[str, Any] | None) -> str | None:
+def _extract_reason(error: RateLimitError, body: JsonMapping | None) -> str | None:
     if body is not None:
         error_block = body.get("error")
         if isinstance(error_block, Mapping):
