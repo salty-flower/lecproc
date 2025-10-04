@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import logging
+import math
 from asyncio import CancelledError
 from collections.abc import Callable
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
-from litellm.exceptions import InternalServerError
+from litellm.exceptions import InternalServerError, RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from pydantic import computed_field
@@ -19,6 +20,7 @@ from common_cli_settings import CommonCliSettings
 from logs import TaskID, create_progress, get_logger
 
 from .models import compose_user_messages
+from .rate_limit import execute_with_rate_limit_retry
 from .settings import settings
 from .typst_fixer import fix_typst_errors_iteratively
 from .typst_parser import extract_typst_blocks
@@ -45,6 +47,7 @@ def discover_context_file(root_path: Path, extensions: list[str], base_name: str
 
 
 _COMPLETION_THRESHOLD = 0.999
+_WAIT_DESCRIPTION_MAX = 80
 
 
 class ProgressTracker:
@@ -75,6 +78,42 @@ class ProgressTracker:
         description = f"{description_base} ({finished}/{self._total_files})"
 
         self._progress.update(self._task_id, completed=completed_total, description=description)
+
+    async def wait_for_rate_limit(self, seconds: float, description: str | None = None) -> None:
+        """Display a temporary progress bar while waiting for rate limits to reset."""
+
+        total = max(0.0, seconds)
+        if total <= 0:
+            return
+
+        base_description = (description or "Waiting for rate limit reset").strip()
+        if not base_description:
+            base_description = "Waiting for rate limit reset"
+        if len(base_description) > _WAIT_DESCRIPTION_MAX:
+            base_description = base_description[: _WAIT_DESCRIPTION_MAX - 3] + "..."
+
+        task_id = self._progress.add_task(base_description, total=total)
+        start = anyio.current_time()
+
+        try:
+            while True:
+                elapsed = anyio.current_time() - start
+                remaining = total - elapsed
+                if remaining <= 0:
+                    self._progress.update(task_id, completed=total, description=f"{base_description} (resuming)")
+                    break
+
+                remaining_seconds = max(1, math.ceil(remaining))
+                self._progress.update(
+                    task_id,
+                    completed=min(total, elapsed),
+                    description=f"{base_description} ({remaining_seconds}s remaining)",
+                )
+
+                await anyio.sleep(min(1.0, remaining))
+        finally:
+            with contextlib.suppress(KeyError):
+                self._progress.remove_task(task_id)
 
 
 class RetryProgressCallback(CustomLogger):
@@ -390,14 +429,38 @@ async def _convert_one(
 
                 set_stage(_PHASE_STAGE_DRAFTING, f"Drafting {source_path.name}")
 
-                try:
+                async def _wait_for_reset(seconds: float, description: str | None) -> None:
+                    wait_label = description or "Rate limited"
+                    display = f"{source_path.name}: {wait_label}"
+                    set_stage(_PHASE_STAGE_DRAFTING, display)
+                    await tracker.wait_for_rate_limit(seconds, display)
+
+                async def _request_completion() -> litellm.ModelResponse:
                     with anyio.fail_after(settings.request_timeout_s):
-                        response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+                        return await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
                             model=model,
                             messages=messages,
-                            num_retries=settings.max_retry_attempts - 1,
+                            num_retries=0,
                             callbacks=[retry_callback],
                         )
+
+                try:
+                    response = await execute_with_rate_limit_retry(
+                        _request_completion,
+                        logger=logger,
+                        max_attempts=settings.max_retry_attempts,
+                        wait_callback=_wait_for_reset,
+                        context=f"{source_path.name} rate limit",
+                    )
+                except RateLimitError as error:
+                    logger.error(  # noqa: TRY400
+                        "Rate limit persisted for %s after %d attempts: %s",
+                        source_path.name,
+                        settings.max_retry_attempts,
+                        error,
+                    )
+                    set_stage(_PHASE_STAGE_COMPLETE, f"Rate limit for {source_path.name}")
+                    return
                 except (TimeoutError, CancelledError):
                     logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
                     set_stage(_PHASE_STAGE_COMPLETE, f"Draft timed out for {source_path.name}")

@@ -8,12 +8,14 @@ from typing import cast
 import anyio
 import litellm
 import regex as re
+from litellm.exceptions import InternalServerError, RateLimitError
 from litellm.types.utils import ModelResponse
 
 from logs import get_logger
 
 from .fix_progress import TypstFixEntry, TypstFixProgress
 from .prompt_loader import get_rendered_agent
+from .rate_limit import execute_with_rate_limit_retry
 from .settings import settings
 from .typst_parser import TypstBlock, extract_typst_blocks, reconstruct_markdown_with_fixes
 from .typst_validator import TypstValidationResult, get_invalid_blocks, validate_all_typst_blocks
@@ -44,19 +46,27 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
             surrounding_context=block.get_context_for_llm(),  # Context without AST paths
         )
 
-        response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
-            model=model,
-            messages=messages,
-        )
+        async def _request_completion() -> ModelResponse:
+            result = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
+                model=model,
+                messages=messages,
+                num_retries=0,
+            )
+            return result if isinstance(result, ModelResponse) else ModelResponse.model_validate(result)
 
-        response = response if isinstance(response, ModelResponse) else ModelResponse.model_validate(response)
+        response = await execute_with_rate_limit_retry(
+            _request_completion,
+            logger=logger,
+            max_attempts=settings.max_retry_attempts,
+            context=f"Typst fix for {block.location}",
+        )
 
         # Parse the response to extract fixed content
         response_text = cast(
             "list[litellm.Choices]",
             response.choices,
         )[0].message.content  # type: ignore[reportUnknownMemberType]
-    except (TimeoutError, litellm.exceptions.InternalServerError) as e:
+    except (TimeoutError, InternalServerError, RateLimitError) as e:
         # Only catch the same humble set as main module
         logger.warning("LLM error in fix_single_typst_error: %s", e)
         return block.content
