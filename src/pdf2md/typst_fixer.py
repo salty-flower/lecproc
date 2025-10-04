@@ -1,6 +1,7 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -101,8 +102,11 @@ def _sanitize_llm_fix(response_text: str, block_type: str) -> str:
 
 
 async def fix_typst_errors(
-    markdown_content: str, validation_results: list[TypstValidationResult], logger_name: str, max_attempts: int = 3
-) -> tuple[str, bool, dict[str, str]]:
+    markdown_content: str,
+    validation_results: list[TypstValidationResult],
+    logger_name: str,
+    max_attempts: int = 3,
+) -> tuple[str, bool, dict[str, str], Path | None]:
     """
     Fix Typst errors in markdown content using LLM with parallel processing and progress saving.
 
@@ -116,12 +120,13 @@ async def fix_typst_errors(
     invalid_results = get_invalid_blocks(validation_results)
 
     if not invalid_results:
-        return markdown_content, True, {}
+        return markdown_content, True, {}, None
 
     logger.info("Attempting to fix %d Typst error(s) using LLM", len(invalid_results))
 
     current_content = markdown_content
     progress_file = _get_progress_file_path(markdown_content)
+    progress_file_used = progress_file.exists()
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()[:16]
 
     # Load existing progress
@@ -130,6 +135,7 @@ async def fix_typst_errors(
         progress = TypstFixProgress(content_hash=content_hash, fixes={})
     else:
         logger.info("Loaded %d existing fix(es) from progress file", len(progress.fixes))
+        progress_file_used = True
 
     # Group fixes by content to avoid duplicate work, but keep block reference for type info
     unique_fixes: dict[str, tuple[TypstBlock, str]] = {}  # content -> (block, error_message)
@@ -199,6 +205,7 @@ async def fix_typst_errors(
             # Save progress after each batch
             if batch_progress:
                 save_return_code = await progress.save_to_file(progress_file)
+                progress_file_used = True
                 logger.debug(
                     "Saved progress: %d fixes completed with return code %d", len(progress.fixes), save_return_code
                 )
@@ -218,50 +225,61 @@ async def fix_typst_errors(
 
         logger.info("Applied %d Typst fix(es) to markdown content", len(progress.fixes))
 
-        # Clean up progress file on successful completion
-        all_fixed = len(progress.fixes) >= len(unique_fixes)
-        if all_fixed:
-            progress.cleanup_file(progress_file)
-
     all_fixed = len(progress.fixes) >= len(unique_fixes)
     fixed_contents_final = (
         {entry.original_content: entry.fixed_content for entry in progress.fixes.values()} if progress.fixes else {}
     )
-    return current_content, all_fixed, fixed_contents_final
+    progress_file_to_return = progress_file if progress_file_used or progress.fixes else None
+    return current_content, all_fixed, fixed_contents_final, progress_file_to_return
 
 
 async def fix_typst_errors_iteratively(
-    markdown_content: str, logger_name: str, max_iterations: int = 2, max_fix_attempts: int = 3
-) -> tuple[str, bool]:
+    markdown_content: str,
+    logger_name: str,
+    max_iterations: int = 2,
+    max_fix_attempts: int = 3,
+    progress_callback: Callable[[float, str | None], None] | None = None,
+) -> tuple[str, bool, set[Path]]:
     """
     Iteratively fix Typst errors until all are resolved or max iterations reached.
 
     Returns:
-        (final_content, all_errors_fixed)
+        (final_content, all_errors_fixed, progress_files)
     """
     logger = get_logger(logger_name)
     current_content = markdown_content
+    used_progress_files: set[Path] = set()
 
     for iteration in range(max_iterations):
         logger.info("Typst error fixing iteration %d/%d", iteration + 1, max_iterations)
+
+        if progress_callback and max_iterations:
+            iteration_fraction = iteration / max_iterations
+            progress_callback(iteration_fraction, f"iteration {iteration + 1}/{max_iterations}")
 
         # Extract and validate Typst blocks
         typst_blocks = extract_typst_blocks(current_content)
         if not typst_blocks:
             logger.info("No Typst blocks found")
-            return current_content, True
+            if progress_callback:
+                progress_callback(1.0, "no typst blocks found")
+            return current_content, True, used_progress_files
 
         validation_results = await validate_all_typst_blocks(typst_blocks, logger_name)
         invalid_results = get_invalid_blocks(validation_results)
 
         if not invalid_results:
             logger.info("All Typst blocks are valid")
-            return current_content, True
+            if progress_callback:
+                progress_callback(1.0, "typst already valid")
+            return current_content, True, used_progress_files
 
         # Attempt to fix errors
-        current_content, _all_fixed_by_count, fixed_map = await fix_typst_errors(
+        current_content, _all_fixed_by_count, fixed_map, progress_file = await fix_typst_errors(
             current_content, validation_results, logger_name, max_fix_attempts
         )
+        if progress_file is not None:
+            used_progress_files.add(progress_file)
 
         # Re-validate only the blocks we already have, after applying content updates in-memory
         if fixed_map:
@@ -277,7 +295,11 @@ async def fix_typst_errors_iteratively(
 
         if not invalid_after:
             logger.info("All Typst errors fixed successfully")
-            return current_content, True
+            if progress_callback:
+                progress_callback(1.0, "typst fixes complete")
+            return current_content, True, used_progress_files
 
     logger.warning("Could not fix all Typst errors after %d iterations", max_iterations)
-    return current_content, False
+    if progress_callback:
+        progress_callback(1.0, "typst fixes incomplete")
+    return current_content, False, used_progress_files
