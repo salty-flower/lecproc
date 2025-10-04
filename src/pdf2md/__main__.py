@@ -2,12 +2,12 @@ import base64
 import contextlib
 import logging
 from asyncio import CancelledError
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, cast, override
 
 import anyio
 import litellm
-from anyio import open_file
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -33,8 +33,7 @@ from .utils import (
 
 
 async def load_context_file(context_path: Path) -> str:
-    async with await open_file(context_path, "r", encoding="utf-8") as f:
-        return await f.read()
+    return await anyio.Path(context_path).read_text(encoding="utf-8")
 
 
 def discover_context_file(root_path: Path, extensions: list[str], base_name: str = "context") -> Path | None:
@@ -45,22 +44,50 @@ def discover_context_file(root_path: Path, extensions: list[str], base_name: str
     return None
 
 
+_COMPLETION_THRESHOLD = 0.999
+
+
+class ProgressTracker:
+    """Track per-file conversion progress and surface it through a shared task."""
+
+    def __init__(self, progress: Progress, task_id: TaskID, total_files: int) -> None:
+        self._progress: Progress = progress
+        self._task_id: TaskID = task_id
+        self._total_files: int = total_files
+        self._file_progress: dict[Path, float] = {}
+        self._status: str | None = None
+
+    def update(self, source_path: Path, stage: float, status: str | None = None) -> None:
+        """Update the tracked stage for ``source_path`` and refresh the task display."""
+
+        clamped = max(0.0, min(stage, 1.0))
+        previous = self._file_progress.get(source_path, 0.0)
+        clamped = max(clamped, previous)
+
+        self._file_progress[source_path] = clamped
+
+        if status is not None:
+            self._status = status
+
+        completed_total = sum(self._file_progress.values())
+        finished = sum(1 for value in self._file_progress.values() if value >= _COMPLETION_THRESHOLD)
+        description_base = self._status or "Converting documents"
+        description = f"{description_base} ({finished}/{self._total_files})"
+
+        self._progress.update(self._task_id, completed=completed_total, description=description)
+
+
 class RetryProgressCallback(CustomLogger):
-    def __init__(self, progress: Progress, task_id: TaskID, file_name: str) -> None:
+    def __init__(self, on_retry: Callable[[int, int], None]) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]
-        self.progress: Progress = progress
-        self.task_id: TaskID = task_id
-        self.file_name: str = file_name
         self.retry_count: int = 0
         self.max_retries: int = settings.max_retry_attempts
+        self._on_retry: Callable[[int, int], None] = on_retry
 
     @override
     def log_pre_api_call(self, model: Any, messages: Any, kwargs: Any) -> None:  # pyright: ignore[reportAny]
         if self.retry_count > 0:
-            self.progress.update(
-                self.task_id,
-                description=f"Converting documents (retry {self.retry_count}/{self.max_retries - 1} for {self.file_name})",
-            )
+            self._on_retry(self.retry_count, self.max_retries - 1)
 
     @override
     def log_failure_event(self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any) -> None:  # pyright: ignore[reportAny]
@@ -252,7 +279,8 @@ class Cli(CommonCliSettings):
             general_context = None
 
         with progress:
-            task_id: TaskID = progress.add_task("Converting documents", total=len(to_process))
+            task_id: TaskID = progress.add_task("Converting documents", total=float(len(to_process)))
+            tracker = ProgressTracker(progress, task_id, len(to_process))
 
             semaphore = anyio.Semaphore(self.concurrency)
             async with anyio.create_task_group() as tg:
@@ -261,8 +289,7 @@ class Cli(CommonCliSettings):
                         _convert_one,
                         source_path,
                         self.model,
-                        progress,
-                        task_id,
+                        tracker,
                         semaphore,
                         self.logger.name,
                         general_context,
@@ -289,21 +316,36 @@ class Cli(CommonCliSettings):
             )
 
 
+_PHASE_STAGE_START = 0.05
+_PHASE_STAGE_DRAFTING = 0.15
+_PHASE_STAGE_DRAFT_COMPLETE = 0.35
+_PHASE_STAGE_VALIDATING = 0.45
+_PHASE_STAGE_FIX_BASE = 0.5
+_PHASE_STAGE_FIX_DONE = 0.9
+_PHASE_STAGE_COMPLETE = 1.0
+
+
 async def _convert_one(
     source_path: Path,
     model: str,
-    progress: Progress,
-    task_id: TaskID,
+    tracker: ProgressTracker,
     semaphore: anyio.Semaphore,
     logger_name: str,
     general_context: str | None = None,
 ) -> None:
     logger = get_logger(logger_name)
+    progress_files: set[Path] = set()
+
+    def set_stage(stage: float, status: str | None = None) -> None:
+        tracker.update(source_path, stage, status)
+
+    set_stage(_PHASE_STAGE_START, f"Starting {source_path.name}")
 
     try:
         metadata = get_input_file_metadata(source_path)
         if metadata is None:
             logger.error("Skipping unsupported file type: %s", source_path.name)
+            set_stage(_PHASE_STAGE_COMPLETE, f"Unsupported file: {source_path.name}")
             return
 
         output_path = output_path_for(source_path)
@@ -313,17 +355,15 @@ async def _convert_one(
         text: str | None = None
         if intermediate_path.exists():
             try:
-                async with await open_file(intermediate_path, "r", encoding="utf-8") as f:
-                    text = await f.read()
+                text = await anyio.Path(intermediate_path).read_text(encoding="utf-8")
                 if text:
                     logger.info("Found existing Phase 1 output, skipping to Phase 2: %s", intermediate_path.name)
+                    set_stage(_PHASE_STAGE_DRAFT_COMPLETE, f"Reusing draft for {source_path.name}")
                 else:
-                    # Empty file, remove it and proceed with Phase 1
                     with contextlib.suppress(OSError):
                         intermediate_path.unlink(missing_ok=True)
                     text = None
             except (OSError, UnicodeDecodeError):
-                # If we can't read the file, remove it and proceed with Phase 1
                 with contextlib.suppress(OSError):
                     intermediate_path.unlink(missing_ok=True)
                 text = None
@@ -331,8 +371,7 @@ async def _convert_one(
         # Phase 1: Only run if we don't have existing intermediate content
         if text is None:
             async with semaphore:
-                async with await open_file(source_path, "rb") as f:
-                    raw_bytes = await f.read()
+                raw_bytes = await anyio.Path(source_path).read_bytes()
                 base64_data = base64.b64encode(raw_bytes).decode("utf-8")
                 messages = await compose_user_messages(
                     source_path.name,
@@ -341,10 +380,16 @@ async def _convert_one(
                     general_context,
                 )
 
-                # Create retry progress callback
-                retry_callback = RetryProgressCallback(progress, task_id, source_path.name)
+                def handle_retry(retry_index: int, max_retries: int) -> None:
+                    set_stage(
+                        _PHASE_STAGE_DRAFTING,
+                        f"Retry {retry_index}/{max_retries} for {source_path.name}",
+                    )
 
-                # Enforce an overall per-request timeout on top of provider timeouts and use built-in retry
+                retry_callback = RetryProgressCallback(handle_retry)
+
+                set_stage(_PHASE_STAGE_DRAFTING, f"Drafting {source_path.name}")
+
                 try:
                     with anyio.fail_after(settings.request_timeout_s):
                         response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
@@ -355,9 +400,11 @@ async def _convert_one(
                         )
                 except (TimeoutError, CancelledError):
                     logger.error("Timed out after %s", settings.request_timeout_s)  # noqa: TRY400
+                    set_stage(_PHASE_STAGE_COMPLETE, f"Draft timed out for {source_path.name}")
                     return
                 except (InternalServerError, VertexAIError):
                     logger.error("LLM API vendor boom")  # noqa: TRY400
+                    set_stage(_PHASE_STAGE_COMPLETE, f"Draft failed for {source_path.name}")
                     return
 
                 text = cast(
@@ -365,49 +412,81 @@ async def _convert_one(
                     cast("litellm.ModelResponse", response).choices,  # pyright: ignore[reportPrivateImportUsage]
                 )[0].message.content
 
-                # Save intermediate markdown after Phase 1 (before Typst validation)
                 if text:
-                    async with await open_file(intermediate_path, "w", encoding="utf-8") as f:
-                        _ = await f.write(text)
+                    _ = await anyio.Path(intermediate_path).write_text(text, encoding="utf-8")
                     logger.info("Phase 1 complete: Saved intermediate markdown to %s", intermediate_path.name)
+                    set_stage(_PHASE_STAGE_DRAFT_COMPLETE, f"Draft complete for {source_path.name}")
+                else:
+                    logger.error("Received empty draft content for %s", source_path.name)
+                    set_stage(_PHASE_STAGE_COMPLETE, f"Empty draft for {source_path.name}")
+                    return
 
-        # Phase 2: Typst validation and fixing
+        all_fixed = False
+
         if text and settings.enable_fixing_phase:
             logger.info("Phase 2: Validating and fixing Typst content for %s", source_path.name)
+            set_stage(_PHASE_STAGE_VALIDATING, f"Validating Typst for {source_path.name}")
 
-            # Extract Typst blocks from the generated markdown
             typst_blocks = extract_typst_blocks(text)
 
             if typst_blocks:
                 logger.info("Found %d Typst block(s) in %s", len(typst_blocks), source_path.name)
 
-                # Always run the iterative fixer; it will no-op if all are valid
-                fixed_text, all_fixed = await fix_typst_errors_iteratively(
-                    text, logger_name, max_iterations=4, max_fix_attempts=3
+                def iteration_progress(fraction: float, message: str | None = None) -> None:
+                    span = _PHASE_STAGE_FIX_DONE - _PHASE_STAGE_FIX_BASE
+                    stage = _PHASE_STAGE_FIX_BASE + max(0.0, min(fraction, 1.0)) * span
+                    set_stage(
+                        stage, f"{source_path.name}: {message}" if message else f"Fixing Typst for {source_path.name}"
+                    )
+
+                fixed_text, all_fixed, iteration_progress_files = await fix_typst_errors_iteratively(
+                    text,
+                    logger_name,
+                    max_iterations=4,
+                    max_fix_attempts=3,
+                    progress_callback=iteration_progress,
                 )
+                progress_files.update(iteration_progress_files)
 
                 text = fixed_text
                 if all_fixed:
                     logger.info("Successfully fixed all Typst errors in %s", source_path.name)
+                    set_stage(_PHASE_STAGE_FIX_DONE, f"Typst fixes complete for {source_path.name}")
                 else:
                     logger.warning(
                         "Could not fix all Typst errors in %s, proceeding with partial fixes",
                         source_path.name,
                     )
+                    set_stage(_PHASE_STAGE_FIX_DONE, f"Partial Typst fixes for {source_path.name}")
             else:
                 logger.info("No Typst blocks found in %s", source_path.name)
+                set_stage(_PHASE_STAGE_FIX_DONE, f"No Typst blocks in {source_path.name}")
 
-            # Write result
-            async with await open_file(output_path, "w", encoding="utf-8") as f:
-                _ = await f.write(text)
+            _ = await anyio.Path(output_path).write_text(text, encoding="utf-8")
+
+            if all_fixed:
+                for progress_file in progress_files:
+                    with contextlib.suppress(OSError):
+                        progress_file.unlink(missing_ok=True)
 
             logger.info("Converted: %s -> %s. Removed intermediate file", source_path.name, output_path.name)
+            completion_status = (
+                f"Completed {source_path.name}"
+                if all_fixed
+                else f"Completed with remaining Typst errors: {source_path.name}"
+            )
+            set_stage(_PHASE_STAGE_COMPLETE, completion_status)
         else:
             logger.info("Skipping fixing phase due to missing text or disabling fixing phase")
+            if text:
+                set_stage(_PHASE_STAGE_COMPLETE, f"Draft ready for {source_path.name}")
+            else:
+                set_stage(_PHASE_STAGE_COMPLETE, f"No output for {source_path.name}")
     except Exception:
+        set_stage(_PHASE_STAGE_COMPLETE, f"Failed {source_path.name}")
         logger.exception("Failed to convert %s", source_path)
     finally:
-        progress.update(task_id, advance=1)
+        tracker.update(source_path, _PHASE_STAGE_COMPLETE)
 
 
 if __name__ == "__main__":
