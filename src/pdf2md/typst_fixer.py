@@ -1,7 +1,9 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
+import tempfile
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -23,10 +25,27 @@ ReMatch = str | tuple[str, str]
 logger = get_logger(__name__)
 
 
+@lru_cache(maxsize=1)
+def _progress_cache_dir() -> Path:
+    """Return the directory used to persist Typst fix progress."""
+
+    base_dir = Path(tempfile.gettempdir())
+    progress_dir = base_dir / "lecproc" / "typst_fix"
+    try:
+        progress_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:  # pragma: no cover - fall back to cwd if tmpdir unavailable
+        fallback_dir = Path.cwd() / ".typst_fix_cache"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug("Falling back to current working directory for progress cache: %s", fallback_dir)
+        return fallback_dir
+    return progress_dir
+
+
 def _get_progress_file_path(markdown_content: str) -> Path:
     """Generate a unique progress file path based on content hash."""
+
     content_hash = hashlib.sha256(markdown_content.encode()).hexdigest()[:16]
-    return Path.cwd() / f".typst_fix_progress_{content_hash}.json"
+    return _progress_cache_dir() / f"typst_fix_progress_{content_hash}.json"
 
 
 async def fix_single_typst_error(block: "TypstBlock", error_message: str, model: str) -> str:
@@ -133,8 +152,20 @@ async def fix_typst_errors(
     progress = await TypstFixProgress.load_from_file(progress_file)
     if progress is None:
         progress = TypstFixProgress(content_hash=content_hash, fixes={})
+    elif progress.content_hash != content_hash:
+        logger.info(
+            "Ignoring mismatched progress cache at %s (expected %s, found %s)",
+            progress_file,
+            content_hash,
+            progress.content_hash,
+        )
+        progress = TypstFixProgress(content_hash=content_hash, fixes={})
     else:
-        logger.info("Loaded %d existing fix(es) from progress file", len(progress.fixes))
+        logger.info(
+            "Loaded %d existing fix(es) from progress file %s",
+            len(progress.fixes),
+            progress_file,
+        )
         progress_file_used = True
 
     # Group fixes by content to avoid duplicate work, but keep block reference for type info
