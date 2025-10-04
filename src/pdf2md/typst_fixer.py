@@ -1,7 +1,7 @@
 """LLM-based Typst error fixing using LiteLLM."""
 
 import hashlib
-import os
+import tempfile
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
@@ -29,12 +29,11 @@ logger = get_logger(__name__)
 def _progress_cache_dir() -> Path:
     """Return the directory used to persist Typst fix progress."""
 
-    cache_home = os.getenv("XDG_CACHE_HOME")
-    base_dir = Path(cache_home) if cache_home else Path.home() / ".cache"
+    base_dir = Path(tempfile.gettempdir())
     progress_dir = base_dir / "lecproc" / "typst_fix"
     try:
         progress_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:  # pragma: no cover - extremely unlikely but defensive
+    except OSError:  # pragma: no cover - fall back to cwd if tmpdir unavailable
         fallback_dir = Path.cwd() / ".typst_fix_cache"
         fallback_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(
