@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     drafting_model: str = "gemini/gemini-2.5-pro"
-    fixing_model: str = "openrouter/x-ai/grok-4-fast:free"
+    fixing_model: str = "openrouter/openai/gpt-oss-20b:free"
     max_concurrency: int = 16
     request_timeout_s: float = 600.0
     output_extension: str = "md"
