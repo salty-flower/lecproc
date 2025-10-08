@@ -91,3 +91,39 @@ In your output, you should enclose the diagram in a code block with the language
 \end{tikzpicture}
 \end{document}
 ```
+
+**Plotting some function example**:
+
+```tikz
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.16}
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[
+    xlabel={$x$},
+    axis lines=left,
+    xmin=0, xmax=2.5,
+    ymin=0, ymax=1.7,
+    xtick={0, 0.5, 1, 1.5, 2, 2.5},
+    ytick={0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6},
+    grid=none,
+    width=10cm,
+    height=8cm,
+    every axis x label/.style={at={(current axis.right of origin)}, anchor=north west},
+    axis line style={-},
+]
+% Function from Question 5
+% N(t) = (e^(3t) * sech(3t)) / ( (0.2/3) * ln(e^(6t)+1) + 1 - (0.2/3)*ln(2) )
+% sech(x) = 1/cosh(x)
+\addplot[
+    domain=0:2.5,
+    samples=200,
+    smooth,
+    black,
+    thick
+] { exp(3*x) / (cosh(3*x) * ( (0.2/3) * ln(exp(6*x)+1) + 1 - (0.2/3)*ln(2) )) };
+\end{axis}
+\node[below=0.5cm] at (current bounding box.south) {\textbf{Figure 2:} Graph of $N(t)$ (Question 5).};
+\end{tikzpicture}
+\end{document}
+```
