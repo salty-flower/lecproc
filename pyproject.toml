@@ -21,6 +21,7 @@ dependencies = [
     "regex>=2025.9.1",
     "markdown-it-py[linkify,plugins]>=4.0.0",
     "mdformat>=0.6.0",
+    "huggingface-hub[hf-xet]>=0.35.3",
 ]
 
 [dependency-groups]
