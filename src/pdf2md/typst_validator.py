@@ -133,7 +133,7 @@ async def validate_typst_block(block: TypstBlock, logger_name: str) -> TypstVali
 
 
 async def validate_all_typst_blocks(
-    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = settings.max_concurrency
+    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = settings.max_typst_concurrency
 ) -> list[TypstValidationResult]:
     """Validate all Typst blocks in parallel using subprocess calls."""
     if not blocks:
@@ -214,7 +214,7 @@ def format_validation_errors(invalid_results: list[TypstValidationResult]) -> st
 
 
 async def has_any_typst_errors(
-    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = settings.max_concurrency
+    blocks: list[TypstBlock], logger_name: str, max_concurrency: int = settings.max_typst_concurrency
 ) -> tuple[bool, str]:
     """
     Check if any Typst blocks have compilation errors.

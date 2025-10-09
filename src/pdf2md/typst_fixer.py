@@ -184,7 +184,7 @@ async def fix_typst_errors(
         logger.info("Fix attempt %d/%d for %d error(s)", attempt + 1, max_attempts, len(remaining_fixes))
 
         # Process fixes in parallel with limited concurrency
-        batch_size = min(settings.max_concurrency, len(remaining_fixes))
+        batch_size = min(settings.max_llm_concurrency, len(remaining_fixes))
         fixes_list = list(remaining_fixes.items())
 
         async def fix_single_wrapper(original_content: str, fix_info: tuple[TypstBlock, str]) -> tuple[str, str | None]:

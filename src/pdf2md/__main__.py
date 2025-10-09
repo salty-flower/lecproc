@@ -156,7 +156,7 @@ class Cli(CommonCliSettings):
     context_file_base: str = "context"
     context_extensions: ClassVar[list[str]] = ["json", "md", "txt"]
 
-    concurrency: int = settings.max_concurrency
+    concurrency: int = settings.max_llm_concurrency
 
     @override
     def model_post_init(self, _context: Any) -> None:  # pyright: ignore[reportAny]
