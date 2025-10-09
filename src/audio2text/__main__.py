@@ -40,6 +40,7 @@ class Cli(CommonCliSettings):
 
     @override
     async def cli_cmd_async(self) -> None:
+        self.logger.info("Loading media from %s and will write segments to %s", self.media_path, self.save_path)
         segments, info = self.model.transcribe(  # pyright: ignore[reportUnknownMemberType]
             str(self.media_path.absolute()), language=self.language
         )
@@ -50,7 +51,6 @@ class Cli(CommonCliSettings):
             info.language_probability,
         )
         self.logger.info("Audio duration: %.2fs", info.duration)
-        self.logger.info("Writing segments to %s", self.save_path)
 
         progress = create_progress()
 
