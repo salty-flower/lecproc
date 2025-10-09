@@ -68,7 +68,7 @@ class CommonCliSettings(BaseSettings):
 
     @classmethod
     def run_anyio_static(cls) -> None:
-        cls().run_anyio()
+        _ = CliApp.run(cls, cli_cmd_method_name="run_anyio")
 
     def run_anyio(self) -> None:
         """Instantiate CLI settings and run `cli_cmd_async` under AnyIO."""
