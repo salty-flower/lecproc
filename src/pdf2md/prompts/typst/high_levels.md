@@ -17,6 +17,9 @@ PAY FULL ATTENTION TO THE DETAILS. DO NOT HOLD BACK. GIVE IT YOU ALL.
 
 - Use double-quotes for text within math mode. Example: $X_"Whatever text you would like to give"$
 - More styles example: $bold(P) = mono("Some other text")$, $cal(C)="I am a calligraphic C"$
+- Text above or under some content: $underbrace(1 + 2 + ... + 5, "numbers")$. You can also use: overbrace, underbracket, overbreacket, underparen, overparen, undershell, overshell
+- Text above or under a long symbol: $H stretch(=)^"define" U + p V$, $f : X stretch(->>, size: #150%)_"surjective" Y$
+
 
 ### Grouping
 
