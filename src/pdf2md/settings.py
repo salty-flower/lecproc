@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     drafting_model: str = "gemini/gemini-2.5-pro"
-    fixing_model: str = "openrouter/deepseek/deepseek-chat-v3.1:free"
+    fixing_model: str = "openrouter/google/gemini-2.5-flash"
     max_concurrency: int = 16
     request_timeout_s: float = 600.0
     output_extension: str = "md"
