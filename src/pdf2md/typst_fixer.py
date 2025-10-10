@@ -11,6 +11,8 @@ import anyio
 import litellm
 import regex as re
 from litellm.types.utils import ModelResponse
+from rich.console import Console
+from rich.table import Table
 
 from logs import get_logger
 
@@ -23,6 +25,10 @@ from .typst_validator import TypstValidationResult, get_invalid_blocks, validate
 ReMatch = str | tuple[str, str]
 
 logger = get_logger(__name__)
+
+# Constants for table display
+_MAX_PREVIEW_LENGTH = 40
+_PREVIEW_TRUNCATE_AT = 37
 
 
 @lru_cache(maxsize=1)
@@ -126,17 +132,19 @@ async def fix_single_with_validation(
     model: str,
     logger_name: str,
     max_attempts: int = 3,
-) -> tuple[str | None, bool]:
+) -> tuple[str | None, bool, str | None]:
     """
     Fix a single Typst block with immediate validation after each LLM attempt.
 
     Returns:
-        (fixed_content, is_valid):
+        (fixed_content, is_valid, last_invalid_attempt):
             - fixed_content: the fixed content if successful, None if all attempts failed
             - is_valid: whether the final result is valid
+            - last_invalid_attempt: the last attempted fix that failed validation (for error reporting)
     """
     logger = get_logger(logger_name)
     current_error = initial_error_message
+    last_attempt = None
 
     for attempt in range(max_attempts):
         # Get LLM fix
@@ -158,6 +166,9 @@ async def fix_single_with_validation(
             )
             continue
 
+        # Track this attempt for error reporting
+        last_attempt = fixed_content
+
         # Validate the fixed content immediately
         fixed_block = block.model_copy(update={"content": fixed_content})
         validation = await validate_typst_block(fixed_block, logger_name)
@@ -169,7 +180,7 @@ async def fix_single_with_validation(
                 max_attempts,
                 block.content[:50] + "...",
             )
-            return fixed_content, True
+            return fixed_content, True, None
 
         # Use the new error message for the next retry
         logger.info(
@@ -178,7 +189,7 @@ async def fix_single_with_validation(
         current_error = validation.error_message
 
     logger.warning("All %d fix attempts failed for: %s", max_attempts, block.content[:50] + "...")
-    return None, False
+    return None, False, last_attempt
 
 
 async def _fix_blocks_batch(
@@ -186,23 +197,24 @@ async def _fix_blocks_batch(
     validation_results: list[TypstValidationResult],
     logger_name: str,
     max_attempts: int = 3,
-) -> tuple[str, bool, Path | None]:
+) -> tuple[str, bool, Path | None, list[tuple[TypstBlock, str, str | None]]]:
     """
     Fix a batch of Typst blocks with parallel processing and immediate validation.
 
     Each fix attempt is immediately validated. Only validated fixes are accepted.
 
     Returns:
-        (fixed_content, all_fixed, progress_file):
+        (fixed_content, all_fixed, progress_file, failed_fixes):
             - fixed_content: the fixed markdown content string
             - all_fixed: whether we produced validated fixes for all invalid contents we attempted
             - progress_file: path to the progress file if used, None otherwise
+            - failed_fixes: list of (block, original_content, last_attempt) for blocks that failed to fix
     """
     logger = get_logger(logger_name)
     invalid_results = get_invalid_blocks(validation_results)
 
     if not invalid_results:
-        return markdown_content, True, None
+        return markdown_content, True, None, []
 
     logger.info("Attempting to fix %d Typst error(s) using LLM", len(invalid_results))
 
@@ -240,6 +252,9 @@ async def _fix_blocks_batch(
 
     remaining_fixes = {k: v for k, v in unique_fixes.items() if k not in progress.fixes}
 
+    # Track failed fixes for reporting
+    all_fix_attempts: dict[str, tuple[str | None, bool, str | None]] = {}
+
     if not remaining_fixes:
         logger.info("All errors already fixed in progress cache")
     else:
@@ -249,43 +264,39 @@ async def _fix_blocks_batch(
         batch_size = min(settings.max_llm_concurrency, len(remaining_fixes))
         fixes_list = list(remaining_fixes.items())
 
-        async def fix_single_wrapper(
-            original_content: str, fix_info: tuple[TypstBlock, str]
-        ) -> tuple[str, str | None, bool]:
-            """Wrapper that returns (original_content, fixed_content, is_valid)."""
-            block, error_message = fix_info
-            try:
-                fixed_content, is_valid = await fix_single_with_validation(
-                    block=block,
-                    initial_error_message=error_message,
-                    model=settings.fixing_model,
-                    logger_name=logger_name,
-                    max_attempts=max_attempts,
-                )
-            except Exception:
-                logger.exception("Exception during fix for content: %s", original_content[:50] + "...")
-                return original_content, None, False
-            else:
-                return original_content, fixed_content, is_valid
-
         for i in range(0, len(fixes_list), batch_size):
             batch = fixes_list[i : i + batch_size]
-            batch_results: dict[str, tuple[str | None, bool]] = {}
+            batch_results: dict[str, tuple[str | None, bool, str | None]] = {}
 
             async def collect_result(
-                original_content: str, fix_info: tuple["TypstBlock", str], results: dict[str, tuple[str | None, bool]]
+                original_content: str,
+                fix_info: tuple["TypstBlock", str],
+                results: dict[str, tuple[str | None, bool, str | None]],
             ) -> None:
-                _, fixed_content, is_valid = await fix_single_wrapper(original_content, fix_info)
-                results[original_content] = (fixed_content, is_valid)
+                block, error_message = fix_info
+                try:
+                    fixed_content, is_valid, last_attempt = await fix_single_with_validation(
+                        block=block,
+                        initial_error_message=error_message,
+                        model=settings.fixing_model,
+                        logger_name=logger_name,
+                        max_attempts=max_attempts,
+                    )
+                except Exception:
+                    logger.exception("Exception during fix for content: %s", original_content[:50] + "...")
+                    results[original_content] = (None, False, None)
+                else:
+                    results[original_content] = (fixed_content, is_valid, last_attempt)
 
             # Process all tasks in the batch using task group
             async with anyio.create_task_group() as tg:
                 for original_content, fix_info in batch:
                     tg.start_soon(collect_result, original_content, fix_info, batch_results)
 
-            # Process batch results
+            # Process batch results and track all attempts
             batch_progress = False
-            for original_content, (fixed_content, is_valid) in batch_results.items():
+            for original_content, (fixed_content, is_valid, last_attempt) in batch_results.items():
+                all_fix_attempts[original_content] = (fixed_content, is_valid, last_attempt)
                 if fixed_content is not None and is_valid:
                     # Find the corresponding block to get AST path and type
                     block, _ = remaining_fixes[original_content]
@@ -317,9 +328,17 @@ async def _fix_blocks_batch(
 
         logger.info("Applied %d Typst fix(es) to markdown content", len(progress.fixes))
 
+    # Collect failed fixes for reporting
+    failed_fixes: list[tuple[TypstBlock, str, str | None]] = []
+    for original_content, (block, _) in unique_fixes.items():
+        if original_content not in progress.fixes:
+            # This fix failed
+            last_attempt = all_fix_attempts.get(original_content, (None, False, None))[2]
+            failed_fixes.append((block, original_content, last_attempt))
+
     all_fixed = len(progress.fixes) >= len(unique_fixes)
     progress_file_to_return = progress_file if progress_file_used or progress.fixes else None
-    return current_content, all_fixed, progress_file_to_return
+    return current_content, all_fixed, progress_file_to_return, failed_fixes
 
 
 async def fix_typst_errors(
@@ -360,7 +379,7 @@ async def fix_typst_errors(
         progress_callback(0.5, "fixing typst errors")
 
     # Attempt to fix errors (with immediate validation per block)
-    fixed_content, all_fixed, progress_file = await _fix_blocks_batch(
+    fixed_content, all_fixed, progress_file, failed_fixes = await _fix_blocks_batch(
         markdown_content, validation_results, logger_name, max_fix_attempts
     )
 
@@ -372,5 +391,33 @@ async def fix_typst_errors(
         logger.warning("Some Typst errors could not be fixed")
         if progress_callback:
             progress_callback(1.0, "typst fixes incomplete")
+
+        # Display failed fixes in a Rich table
+        if failed_fixes:
+            console = Console()
+            table = Table(title="[red]Failed Typst Fixes[/red]", show_header=True, header_style="bold")
+            table.add_column("Line", style="cyan", width=8)
+            table.add_column("Original Content", style="yellow", width=_MAX_PREVIEW_LENGTH)
+            table.add_column("Last LLM Attempt", style="magenta", width=_MAX_PREVIEW_LENGTH)
+
+            for block, original_content, last_attempt in failed_fixes:
+                line_num = str(block.location) if block.location else "?"
+                original_preview = (
+                    (original_content[:_PREVIEW_TRUNCATE_AT] + "...")
+                    if len(original_content) > _MAX_PREVIEW_LENGTH
+                    else original_content
+                )
+                attempt_preview = (
+                    (
+                        (last_attempt[:_PREVIEW_TRUNCATE_AT] + "...")
+                        if len(last_attempt) > _MAX_PREVIEW_LENGTH
+                        else last_attempt
+                    )
+                    if last_attempt
+                    else "[dim]No attempt[/dim]"
+                )
+                table.add_row(line_num, original_preview, attempt_preview)
+
+            console.print(table)
 
     return fixed_content, all_fixed, progress_file
