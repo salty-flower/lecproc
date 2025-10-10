@@ -20,7 +20,7 @@ from logs import TaskID, create_progress, get_logger
 
 from .models import compose_user_messages
 from .settings import settings
-from .typst_fixer import fix_typst_errors_iteratively
+from .typst_fixer import fix_typst_errors
 from .typst_parser import extract_typst_blocks
 from .utils import (
     detect_output_collisions,
@@ -439,14 +439,14 @@ async def _convert_one(
                         stage, f"{source_path.name}: {message}" if message else f"Fixing Typst for {source_path.name}"
                     )
 
-                fixed_text, all_fixed, iteration_progress_files = await fix_typst_errors_iteratively(
+                fixed_text, all_fixed, progress_file = await fix_typst_errors(
                     text,
                     logger_name,
-                    max_iterations=4,
                     max_fix_attempts=3,
                     progress_callback=iteration_progress,
                 )
-                progress_files.update(iteration_progress_files)
+                if progress_file is not None:
+                    progress_files.add(progress_file)
 
                 text = fixed_text
                 if all_fixed:

@@ -48,8 +48,8 @@ def _get_progress_file_path(markdown_content: str) -> Path:
     return _progress_cache_dir() / f"typst_fix_progress_{content_hash}.json"
 
 
-async def fix_single_typst_error(block: "TypstBlock", error_message: str, model: str) -> str:
-    """Fix a single Typst code error using LLM with proper block type context."""
+async def _llm_fix_typst_error(block: "TypstBlock", error_message: str, model: str) -> str:
+    """Call LLM to fix a single Typst error (internal helper - does not validate)."""
     try:
         # Use the new agent system to generate the prompt
         prompts_dir = Path(__file__).parent / "prompts"
@@ -77,7 +77,7 @@ async def fix_single_typst_error(block: "TypstBlock", error_message: str, model:
         )[0].message.content  # type: ignore[reportUnknownMemberType]
     except (TimeoutError, litellm.exceptions.InternalServerError) as e:
         # Only catch the same humble set as main module
-        logger.warning("LLM error in fix_single_typst_error: %s", e)
+        logger.warning("LLM error in _llm_fix_typst_error: %s", e)
         return block.content
     else:
         cleaned = _sanitize_llm_fix(response_text or "", block.type)
@@ -141,7 +141,7 @@ async def fix_single_with_validation(
     for attempt in range(max_attempts):
         # Get LLM fix
         try:
-            fixed_content = await fix_single_typst_error(block, current_error, model)
+            fixed_content = await _llm_fix_typst_error(block, current_error, model)
         except Exception:
             logger.exception(
                 "Exception during LLM fix attempt %d/%d for: %s", attempt + 1, max_attempts, block.content[:50]
@@ -181,29 +181,28 @@ async def fix_single_with_validation(
     return None, False
 
 
-async def fix_typst_errors(
+async def _fix_blocks_batch(
     markdown_content: str,
     validation_results: list[TypstValidationResult],
     logger_name: str,
     max_attempts: int = 3,
-) -> tuple[str, bool, dict[str, str], Path | None]:
+) -> tuple[str, bool, Path | None]:
     """
-    Fix Typst errors in markdown content using LLM with immediate validation and parallel processing.
+    Fix a batch of Typst blocks with parallel processing and immediate validation.
 
     Each fix attempt is immediately validated. Only validated fixes are accepted.
 
     Returns:
-        (fixed_content, all_fixed, fixed_contents, progress_file):
+        (fixed_content, all_fixed, progress_file):
             - fixed_content: the fixed markdown content string
             - all_fixed: whether we produced validated fixes for all invalid contents we attempted
-            - fixed_contents: mapping from original content to fixed content applied
             - progress_file: path to the progress file if used, None otherwise
     """
     logger = get_logger(logger_name)
     invalid_results = get_invalid_blocks(validation_results)
 
     if not invalid_results:
-        return markdown_content, True, {}, None
+        return markdown_content, True, None
 
     logger.info("Attempting to fix %d Typst error(s) using LLM", len(invalid_results))
 
@@ -319,72 +318,59 @@ async def fix_typst_errors(
         logger.info("Applied %d Typst fix(es) to markdown content", len(progress.fixes))
 
     all_fixed = len(progress.fixes) >= len(unique_fixes)
-    fixed_contents_final = (
-        {entry.original_content: entry.fixed_content for entry in progress.fixes.values()} if progress.fixes else {}
-    )
     progress_file_to_return = progress_file if progress_file_used or progress.fixes else None
-    return current_content, all_fixed, fixed_contents_final, progress_file_to_return
+    return current_content, all_fixed, progress_file_to_return
 
 
-async def fix_typst_errors_iteratively(
+async def fix_typst_errors(
     markdown_content: str,
     logger_name: str,
-    max_iterations: int = 2,
     max_fix_attempts: int = 3,
     progress_callback: Callable[[float, str | None], None] | None = None,
-) -> tuple[str, bool, set[Path]]:
+) -> tuple[str, bool, Path | None]:
     """
-    Iteratively fix Typst errors until all are resolved or max iterations reached.
+    Fix Typst errors in markdown content using LLM with immediate validation.
 
     Returns:
-        (final_content, all_errors_fixed, progress_files)
+        (final_content, all_errors_fixed, progress_file)
     """
     logger = get_logger(logger_name)
-    current_content = markdown_content
-    used_progress_files: set[Path] = set()
 
-    for iteration in range(max_iterations):
-        logger.info("Typst error fixing iteration %d/%d", iteration + 1, max_iterations)
+    # Extract and validate Typst blocks
+    typst_blocks = extract_typst_blocks(markdown_content)
+    if not typst_blocks:
+        logger.info("No Typst blocks found")
+        if progress_callback:
+            progress_callback(1.0, "no typst blocks found")
+        return markdown_content, True, None
 
-        if progress_callback and max_iterations:
-            iteration_fraction = iteration / max_iterations
-            progress_callback(iteration_fraction, f"iteration {iteration + 1}/{max_iterations}")
-
-        # Extract and validate Typst blocks
-        typst_blocks = extract_typst_blocks(current_content)
-        if not typst_blocks:
-            logger.info("No Typst blocks found")
-            if progress_callback:
-                progress_callback(1.0, "no typst blocks found")
-            return current_content, True, used_progress_files
-
-        validation_results = await validate_all_typst_blocks(typst_blocks, logger_name)
-        invalid_results = get_invalid_blocks(validation_results)
-
-        if not invalid_results:
-            logger.info("All Typst blocks are valid")
-            if progress_callback:
-                progress_callback(1.0, "typst already valid")
-            return current_content, True, used_progress_files
-
-        # Attempt to fix errors (with immediate validation per block)
-        current_content, all_fixed, _fixed_map, progress_file = await fix_typst_errors(
-            current_content, validation_results, logger_name, max_fix_attempts
-        )
-        if progress_file is not None:
-            used_progress_files.add(progress_file)
-
-        # If all fixes succeeded (validated during fixing), we're done
-        if all_fixed:
-            logger.info("All Typst errors fixed and validated successfully")
-            if progress_callback:
-                progress_callback(1.0, "typst fixes complete")
-            return current_content, True, used_progress_files
-
-        # Otherwise, continue to next iteration which will re-validate and find remaining errors
-        logger.info("Some fixes failed or incomplete, continuing to next iteration")
-
-    logger.warning("Could not fix all Typst errors after %d iterations", max_iterations)
     if progress_callback:
-        progress_callback(1.0, "typst fixes incomplete")
-    return current_content, False, used_progress_files
+        progress_callback(0.3, "validating typst blocks")
+
+    validation_results = await validate_all_typst_blocks(typst_blocks, logger_name)
+    invalid_results = get_invalid_blocks(validation_results)
+
+    if not invalid_results:
+        logger.info("All Typst blocks are valid")
+        if progress_callback:
+            progress_callback(1.0, "typst already valid")
+        return markdown_content, True, None
+
+    if progress_callback:
+        progress_callback(0.5, "fixing typst errors")
+
+    # Attempt to fix errors (with immediate validation per block)
+    fixed_content, all_fixed, progress_file = await _fix_blocks_batch(
+        markdown_content, validation_results, logger_name, max_fix_attempts
+    )
+
+    if all_fixed:
+        logger.info("All Typst errors fixed and validated successfully")
+        if progress_callback:
+            progress_callback(1.0, "typst fixes complete")
+    else:
+        logger.warning("Some Typst errors could not be fixed")
+        if progress_callback:
+            progress_callback(1.0, "typst fixes incomplete")
+
+    return fixed_content, all_fixed, progress_file
