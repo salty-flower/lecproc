@@ -29,6 +29,7 @@ PAY FULL ATTENTION TO THE DETAILS. DO NOT HOLD BACK. GIVE IT YOU ALL.
   - or with spacing (`a b c`, `B 2`)
  (use this when you concatenate some math symbols; font is same as math sans, i.e. exactly like you expect `abc` in LaTeX).
   - This applies heavily to subscripts and superscripts.
+- Parentheses around numerator and denominators when they contains spaces, eg. $(d y)/(d x) = 1$, $(d arrow(u))/(d t) = vec(1, 2)$
 
 #### Subscripts and Superscripts
 
@@ -44,11 +45,13 @@ To align, use "&" exactly as you use it in LaTeX.
 
 ### MISC
 
-- Cases: within a case, contents automatically get concatenated; use comma to separate different cases, not semicolon.
-  eg. $$X_(n+1) = cases(X_n + 1", "&"if the bulb works at " n+1, 0", "&"if the bulb burns out at time " n+1)$$
+- Cases: within a case, contents automatically get concatenated; use comma to separate different cases. When you don't want it to be a separator, use a backslash before it, that is, "\,".
+  eg. $$X_(n+1) = cases(X_n + 1\,&"if the bulb works at" n+1,  0\,&"if the bulb burns out at time" n+1)$$
 - Matrices
   - bordered example: $$bold(P) = mat(, 0, 1, 2, 3, 4; 0, 0.8, 0.2, 0, 0, 0; 1, 0.1, 0.8, 0.1, 0, 0; 2, 0, 0.1, 0.8, 0.1, 0; 3, 0, 0, 0.1, 0.8, 0.1; 4, 0, 0, 0, 0.2, 0.8; augment: #(hline:1,vline:1))$$
   - no bordered example: $$P = mat(delim: "|", 1/4, 3/4, 0, 0, 0; 1/2, 1/2, 0, 0, 0; 0, 0, 1, 0, 0; 0, 0, 1/3, 2/3, 0; 1, 0, 0, 0, 0)$$
+- $vec(1,2,3)$ and $vec(u, v)$ give a column vector. $arrow(u)$ gives a "u" with a right-pointing arrow on top.
+- It's often an error to write $vec(<something>)$, because that merely renders the only element inside a paranthesis. Not to be confused with $arrow(<something>)$.
 
 ## Final Remarks on Output
 
