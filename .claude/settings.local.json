@@ -13,7 +13,9 @@
       "Bash(rg:*)",
       "Bash(uv pip show:*)",
       "WebFetch(domain:docs.litellm.ai)",
-      "WebFetch(domain:docs.pydantic.dev)"
+      "WebFetch(domain:docs.pydantic.dev)",
+      "Bash(just format-python:*)",
+      "Bash(just check-python:*)"
     ],
     "deny": [],
     "ask": []
