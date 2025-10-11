@@ -118,7 +118,7 @@ class Cli(CommonCliSettings):
 
         import torch  # noqa: PLC0415
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda"
         self.logger.info(
             "Loading WhisperX model '%s' on %s (compute_type=%s)",
             settings.whisperx_model,
@@ -126,7 +126,12 @@ class Cli(CommonCliSettings):
             settings.compute_type,
         )
 
-        model = whisperx.load_model(settings.whisperx_model, device, compute_type=settings.compute_type)
+        model = whisperx.load_model(
+            settings.whisperx_model,
+            device,
+            compute_type=settings.compute_type,
+            download_root=str(path_settings.models_download_dir.absolute()),
+        )
         try:
             audio = whisperx.load_audio(str(self.media_path.absolute()))
 
