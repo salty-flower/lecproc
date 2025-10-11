@@ -5,11 +5,26 @@ This module was migrated from Mistune to markdown-it-py + mdformat.
 
 import abc
 from collections.abc import Callable, Iterable
-from typing import ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, override
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
-from mdformat.renderer import MDRenderer, RenderContext, RenderTreeNode
+from mdformat.renderer import MDRenderer
+
+if TYPE_CHECKING:
+
+    class RenderContext(Protocol):
+        """Protocol describing renderer context mapping."""
+
+        def __getitem__(self, key: str) -> object: ...
+
+    class RenderTreeNode(Protocol):
+        """Protocol describing nodes passed to renderer functions."""
+
+        content: str
+else:  # pragma: no cover - typing fallback for runtime import flexibility
+    RenderContext = Any
+    RenderTreeNode = Any
 from mdit_py_plugins.dollarmath.index import dollarmath_plugin
 from pydantic import BaseModel, Field
 

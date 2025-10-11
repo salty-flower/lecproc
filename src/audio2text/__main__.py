@@ -2,7 +2,7 @@ import gc
 from collections.abc import AsyncGenerator, Iterable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, override
+from typing import Any, cast, override
 
 import orjson
 from anyio import to_thread
@@ -90,9 +90,14 @@ class Cli(CommonCliSettings):
                         "[%s - %s] %s",
                         segment.get("start"),
                         segment.get("end"),
-                        segment.get("text", ""),
+                        str(segment.get("text", "")),
                     )
-                    await f.send(orjson.dumps(segment, option=orjson.OPT_APPEND_NEWLINE))
+                    await f.send(
+                        orjson.dumps(
+                            segment,
+                            option=orjson.OPT_APPEND_NEWLINE | orjson.OPT_SERIALIZE_NUMPY,
+                        )
+                    )
         self.logger.info("Transcription complete")
 
     def _transcribe_with_faster_whisper(self) -> tuple[Iterable[SegmentPayload], TranscriptionSummary]:
@@ -116,7 +121,11 @@ class Cli(CommonCliSettings):
             message = "WhisperX support requires the 'whisperx' extra. Install it with `uv add whisperx`."
             raise RuntimeError(message) from exc
 
+        whisperx = cast("Any", whisperx)
+
         import torch  # noqa: PLC0415
+
+        torch = cast("Any", torch)
 
         device = "cuda"
         self.logger.info(
@@ -126,20 +135,20 @@ class Cli(CommonCliSettings):
             settings.compute_type,
         )
 
-        model = whisperx.load_model(
+        model: Any = whisperx.load_model(
             settings.whisperx_model,
             device,
             compute_type=settings.compute_type,
             download_root=str(path_settings.models_download_dir.absolute()),
         )
         try:
-            audio = whisperx.load_audio(str(self.media_path.absolute()))
+            audio: Any = whisperx.load_audio(str(self.media_path.absolute()))
 
             transcribe_kwargs: dict[str, Any] = {"batch_size": settings.whisperx_batch_size}
             if self.language:
                 transcribe_kwargs["language"] = self.language
 
-            result = model.transcribe(audio, **transcribe_kwargs)
+            result: dict[str, Any] = model.transcribe(audio, **transcribe_kwargs)
             segments: list[SegmentPayload] = list(result.get("segments", []))
             language = result.get("language", self.language)
 
@@ -147,7 +156,7 @@ class Cli(CommonCliSettings):
                 self.logger.info("Running WhisperX alignment for language '%s'", language)
                 model_a, metadata = whisperx.load_align_model(language_code=language, device=device)
                 try:
-                    aligned_result = whisperx.align(
+                    aligned_result: dict[str, Any] = whisperx.align(
                         segments,
                         model_a,
                         metadata,
@@ -164,7 +173,7 @@ class Cli(CommonCliSettings):
                 del metadata
         finally:
             if torch.cuda.is_available():
-                gc.collect()
+                _ = gc.collect()
                 torch.cuda.empty_cache()
             del model
 
