@@ -1,7 +1,7 @@
 [project]
 name = "lecproc"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "anyio>=4.10.0",
     "pydantic>=2.11.7",
